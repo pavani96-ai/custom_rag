@@ -1,0 +1,97 @@
+# Local stack. Run through `make up`, which reads ../.env. Ports bind to 127.0.0.1 only.
+name: rag
+
+x-api-build: &api-build
+  context: ../services/api
+  target: runtime
+
+x-app-env: &app-env
+  APP_MODE: local
+  LOG_LEVEL: INFO
+  REDIS_URL: redis://redis:6379/0
+  LOCAL_STORAGE_PATH: /data/storage
+  DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/rag
+  OPENSEARCH_URL: http://opensearch:9200
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: rag
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health"]
+      interval: 10s
+      retries: 30
+      start_period: 30s
+
+
+  api:
+    build: *api-build
+    image: rag-api:local
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment: *app-env
+    volumes:
+      - ../data/storage:/data/storage
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  worker:
+    build: *api-build
+    image: rag-api:local
+    command: celery -A app.celery_app worker --loglevel=INFO
+    environment: *app-env
+    volumes:
+      - ../data/storage:/data/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  flower:
+    image: rag-api:local
+    command: celery -A app.celery_app flower --address=0.0.0.0 --port=5555
+    environment: *app-env
+    ports:
+      - "127.0.0.1:5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ../apps/web
+      target: runtime
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  postgres-data:
+  opensearch-data:
