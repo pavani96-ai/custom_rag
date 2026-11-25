@@ -7,6 +7,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
+from app.collections import router as collections_router
 from app.observability import configure_logging
 from app.settings import get_settings
 
@@ -16,6 +17,7 @@ configure_logging(get_settings().log_level)
 logger = structlog.stdlib.get_logger(__name__)
 
 app = FastAPI(title="Document workspace API")
+app.include_router(collections_router)
 
 
 def resolve_request_id(header_value: str | None) -> str:

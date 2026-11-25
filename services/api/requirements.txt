@@ -7,3 +7,4 @@ pydantic-settings==2.6.1
 flower==2.0.1
 packaging==24.2
 psycopg[binary]==3.2.9
+python-multipart==0.0.20

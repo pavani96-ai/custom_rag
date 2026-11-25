@@ -11,4 +11,5 @@ Read at the start of every session. Each date has 4 to 5 short lines. Move old e
 - Stack verified: API `/health`, web, Flower, and worker JSON logs with a heartbeat job ID.
 - Open: OpenSearch needs `vm.max_map_count=262144` on the host.
 - Added Postgres schema (migration 0001) and a dev seed (0002), applied with `python -m app.migrate`. Added psycopg.
-- Open: OpenSearch mappings wait for milestone 1 item 4 (indexing). Milestone 1 items 3 to 6 not started.
+- Added collection create and multi-file PDF upload endpoints. Originals go to local folder when APP_MODE=local, else the cloud adapter (not built yet).
+- Open: OpenSearch mappings wait for milestone 1 item 4. Browser form and cloud adapter not built. Milestone 1 items 3 to 6 not complete.
