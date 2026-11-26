@@ -1,106 +1,150 @@
-# Document intelligence workspace
+# Private document workspace
 
-A planned Google Cloud application for asking questions across private files and calculating results from spreadsheets. Document answers link to source pages. Calculations link to the dataset version, sheet, and rows behind each number.
+Upload PDFs, then ask questions about them. Each answer cites the document pages it used.
 
-Read each diagram one row at a time, from left to right. Each row follows one operation or signal.
+> Status: milestone 1 (ingest and question answering over PDFs). Browser UI, spreadsheets, and cloud deployment are not built yet. See [docs/plan.md](docs/plan.md).
 
-## System map
+## Architecture
 
-![Four left-to-right paths show how the workspace uploads files, queues indexing, answers questions, and stores conversation history.](docs/diagrams/system-map.png)
+![Architecture: ingest path, query path, and evaluation](docs/images/architecture.svg)
 
-The browser uploads new files directly to Cloud Storage after FastAPI authorizes the destination. Reingestion starts from a stored document ID. On a Redis cache miss, FastAPI reloads the authorized conversation from PostgreSQL.
+- **Ingest:** the API stores the file and queues a job in Redis. A Celery worker extracts text, splits it into chunks, embeds each chunk with Jina, and writes the chunks to OpenSearch.
+- **Query:** the question is embedded and searched in OpenSearch (vector plus keyword). Jina reranks the results, and Gemini answers using only those passages.
+- **Evaluate:** an offline script builds questions from a PDF, calls the running API, and scores the answers with Ragas.
 
-<details>
-<summary>Editable Mermaid flow</summary>
+Details: [docs/architecture.md](docs/architecture.md).
 
-```mermaid
-flowchart LR
-    accTitle: How the workspace fits together
-    accDescr: Four left-to-right paths show how the workspace uploads files, queues indexing, answers questions, and stores conversation history.
-    n11["FastAPI<br/>Authorize upload to<br/>the collection"] --> n12["Next.js browser<br/>Send file bytes<br/>directly to the bucket"] --> n13["Cloud Storage<br/>Keep the original<br/>at a pinned version"]
-    n21["PostgreSQL outbox<br/>FastAPI records the job<br/>with the outbox entry"] --> n22["Redis broker<br/>The outbox publisher<br/>delivers the job"] --> n23["Celery worker<br/>Read the original and<br/>build the index"]
-    n31["Next.js chat<br/>Send the question<br/>and conversation ID"] --> n32["FastAPI<br/>Run retrieval, SQL,<br/>or both"] --> n33["Next.js chat<br/>Show the answer with<br/>citations or a chart"]
-    n41["FastAPI<br/>Commit the<br/>completed turn"] --> n42["PostgreSQL<br/>Store the ordered<br/>conversation history"] --> n43["Redis cache<br/>Keep recent turns<br/>until expiry"]
-    classDef result fill:#E3F3EF,stroke:#135E5B,color:#172B38
-    class n13,n23,n33,n43 result
+## Prerequisites
+
+- Docker and Docker Compose
+- A Jina API key and a Gemini API key
+- On Linux or WSL, set the host setting OpenSearch needs:
+
+```bash
+sudo sysctl -w vm.max_map_count=262144
 ```
 
-</details>
+## 1. Set up
 
-## How a file becomes searchable
-
-Celery runs these paths. Printed and handwritten extraction feed the indexing row. LlamaIndex also indexes spreadsheet descriptions for discovery. A worker claims each missing artifact in PostgreSQL before requesting paid processing. Reingestion reuses completed OCR, enrichment, and embeddings. Generated chunk questions are the first enrichment experiment. A change to the embedding model triggers a collection-wide index migration.
-
-```mermaid
-flowchart LR
-    accTitle: From source file to index
-    accDescr: Printed and handwritten pages become cached page text. A third row turns that text into linked vector-searchable chunks. Spreadsheet rows follow a typed import into PostgreSQL.
-    n11["Cloud Storage<br/>Read PDF pages<br/>or printed scans"] --> n12["Docling + RapidOCR<br/>Extract native text,<br/>layout, or OCR text"] --> n13["Cloud Storage<br/>Cache parsed pages<br/>and source locations"]
-    n21["Cloud Storage<br/>Read pages marked<br/>as handwritten"] --> n22["Google Document AI<br/>Recognize handwriting<br/>and retain coordinates"] --> n23["Cloud Storage<br/>Cache the transcript<br/>and page references"]
-    n31["LlamaIndex<br/>Link stable chunks<br/>to their source pages"] --> n32["Vertex AI<br/>Compute embeddings<br/>on cache misses"] --> n33["OpenSearch<br/>Publish chunks, vectors,<br/>and keyword search data"]
-    n41["CSV or XLSX<br/>Read sheets and<br/>original row positions"] --> n42["Typed table import<br/>Validate columns,<br/>units, and provenance"] --> n43["PostgreSQL<br/>Store versioned rows<br/>for exact calculations"]
-    classDef result fill:#E5F1F9,stroke:#175B84,color:#172B38
-    class n13,n23,n33,n43 result
+```bash
+make env
 ```
 
-## How a question becomes an answer
+This creates `.env` from `.env.example`. Open `.env` and set:
 
-FastAPI checks collection and conversation access before querying. Vertex AI embeds the question for OpenSearch vector search. For a mixed question it calculates first, then uses the result to find explanatory passages. For visual questions it can send a retrieved page or crop to a vision model. ColPali is a retrieval experiment if visual pages regularly miss the candidate set.
+| Variable | Purpose |
+|---|---|
+| `POSTGRES_PASSWORD` | Database password (any value you choose) |
+| `JINA_API_KEY` | Embeddings and reranking |
+| `GEMINI_API_KEY` | Answer generation and evaluation judge |
+| `GEMINI_MODEL` | Model that answers questions |
+| `GEMINI_JUDGE_MODEL` | Model that grades evaluations. Keep it different from `GEMINI_MODEL`. |
 
-```mermaid
-flowchart LR
-    accTitle: Find evidence or calculate a result
-    accDescr: Document search finds evidence for generation, optional vision reads a retrieved page, and read-only SQL computes results over all eligible rows.
-    n11["Authorized question<br/>Search the active<br/>collection index"] --> n12["Hybrid retrieval<br/>OpenSearch vector search +<br/>BM25 keyword search"] --> n13["LlamaIndex<br/>Fuse ranks and rerank<br/>the source passages"]
-    n21["Retrieved page<br/>Select the chart,<br/>diagram, or form crop"] --> n22["Vision model<br/>Read the detail from<br/>the selected region"] --> n23["Page evidence<br/>Carry the original<br/>page citation forward"]
-    n31["Ranked evidence<br/>Use passages and any<br/>selected visual evidence"] --> n32["Vertex AI<br/>Generate an answer<br/>grounded in the sources"] --> n33["FastAPI → Next.js<br/>Validate citation IDs<br/>and display the answer"]
-    n41["Dataset version<br/>Pin the authorized<br/>rows and filters"] --> n42["Read-only SQL<br/>PostgreSQL aggregates<br/>all matching rows"] --> n43["Next.js<br/>Display exact values,<br/>chart, and sheet citation"]
-    classDef result fill:#EFEBF8,stroke:#5B4A85,color:#172B38
-    class n13,n23,n33,n43 result
+Never commit `.env`.
+
+## 2. Start the stack
+
+```bash
+make up
 ```
 
-## Monitoring and evaluation
+Wait until the containers are healthy (`docker compose -f ops/compose.yaml ps`). This starts Postgres, Redis, OpenSearch, the API, the Celery worker, and Flower.
 
-With `APP_MODE=local`, Grafana reads application metrics and metrics derived from trace spans from Prometheus. With `APP_MODE=cloud`, OpenTelemetry exports metrics to Cloud Monitoring, logs to Cloud Logging, and spans to Cloud Trace. Trace IDs correlate cloud logs and spans. Ragas runs in CI and on a schedule.
+| Service | Address |
+|---|---|
+| Web app (upload and ingest) | http://127.0.0.1:3000 |
+| API | http://127.0.0.1:8000 |
+| Flower (task dashboard) | http://127.0.0.1:5555 |
+| pgAdmin (Postgres GUI) | http://127.0.0.1:5050 |
+| RedisInsight (Redis GUI) | http://127.0.0.1:5540 |
 
-```mermaid
-flowchart LR
-    accTitle: Telemetry routing by application mode
-    accDescr: Local metrics feed Prometheus and Grafana. Cloud telemetry goes to Google Cloud Observability.
-    n11["Local app metrics<br/>and trace spans"] --> n12["OpenTelemetry Collector<br/>Derive metrics from spans"] --> n13["Prometheus"] --> n14["Grafana"]
-    n21["Cloud app metrics,<br/>logs, and trace spans"] --> n22["OpenTelemetry Collector"]
-    n22 --> n23["Cloud Monitoring<br/>Metrics and alerts"]
-    n22 --> n24["Cloud Logging<br/>Structured logs"]
-    n22 --> n25["Cloud Trace<br/>Request and worker spans"]
-    n41["Celery workers<br/>Task lifecycle events"] --> n42["Redis broker<br/>Carry Celery events"] --> n43["Flower<br/>Inspect private worker<br/>and task dashboards"]
-    n51["Retrieval + generation<br/>Model and retrieval runs"] --> n52["Trace redaction<br/>Remove sensitive inputs<br/>and outputs"] --> n53["LangSmith<br/>Inspect traced runs"]
-    n61["Evaluation cases<br/>Reference answers and<br/>retrieved passages"] --> n62["Ragas<br/>Score retrieval and<br/>answer faithfulness"] --> n63["Quality reports<br/>Review CI and<br/>scheduled results"]
-    classDef result fill:#FBF0DE,stroke:#865019,color:#172B38
-    class n14,n23,n24,n25,n43,n53,n63 result
+Postgres and Redis have no web page. Open them with a GUI tool or client:
+
+| Service | Host | Port | Database or user |
+|---|---|---|---|
+| Postgres | 127.0.0.1 | 5432 | database `rag`, user `rag`, password `POSTGRES_PASSWORD` from `.env` |
+| Redis | 127.0.0.1 | 6379 | database `0`, no password |
+
+To connect in pgAdmin, add a server with host `postgres` (the name inside Docker, not `127.0.0.1`), port `5432`, database `rag`, and user `rag`. pgAdmin's login is `PGADMIN_DEFAULT_EMAIL` and `PGADMIN_DEFAULT_PASSWORD` from `.env`. In RedisInsight, add a database with host `redis` and port `6379`.
+
+Check the API:
+
+```bash
+curl http://127.0.0.1:8000/health
 ```
 
-## From local development to Google Cloud
+Expected: a JSON response with `"status": "ok"`.
 
-![Five paths cover Docker Compose, Terraform provisioning, image publishing, GKE deployment, and workload access to Secret Manager.](docs/diagrams/deployment.png)
+## 3. Ingest a PDF
 
-Kubernetes manifests deploy Next.js, FastAPI, Celery, the outbox publisher, and operational services. Cloud SQL hosts PostgreSQL. A private OpenSearch workload on GKE serves vector and keyword queries. Memorystore provides separate Redis broker and cache capacity. Workload Identity gives services access to Cloud Storage and Secret Manager. Later source integrations include URLs, Google Drive, OneDrive, and SharePoint.
-
-<details>
-<summary>Editable Mermaid flow</summary>
-
-```mermaid
-flowchart LR
-    accTitle: Build, release, and run
-    accDescr: Five paths cover Docker Compose, Terraform provisioning, image publishing, GKE deployment, and workload access to Secret Manager.
-    n11["Docker images<br/>Web, API, and workers"] --> n12["Docker Compose<br/>Start the local stack"] --> n13["Local workspace<br/>App, stores, workers,<br/>and monitoring"]
-    n21["Terraform<br/>Versioned infrastructure<br/>definitions"] --> n22["Google Cloud<br/>Provision the VPC, GKE,<br/>storage, and identities"] --> n23["Managed services<br/>Cloud SQL, Memorystore,<br/>and Cloud Storage"]
-    n31["Application code<br/>Versioned source<br/>and Dockerfiles"] --> n32["CI/CD<br/>Test, evaluate, and<br/>build Docker images"] --> n33["Artifact Registry<br/>Store immutable<br/>release images"]
-    n41["Release images<br/>Select the tested<br/>image versions"] --> n42["GKE staging<br/>Apply manifests and<br/>verify the full workflow"] --> n43["GKE production<br/>Promote the same<br/>verified images"]
-    n51["GKE workloads<br/>Run the application<br/>under service accounts"] --> n52["Workload Identity<br/>Authenticate each<br/>workload to Google Cloud"] --> n53["Secret Manager<br/>Read the secrets this<br/>workload may access"]
-    classDef result fill:#E8F0F5,stroke:#375A75,color:#172B38
-    class n13,n23,n33,n43,n53 result
+```bash
+make demo-ingest PDF=docs/demo-docs/Transformer_Theory_Notes.pdf
 ```
 
-</details>
+The script uploads the file, queues indexing, and waits. Expected output ends with `is ready`.
 
-[Architecture and API contracts](docs/architecture.md) · [Implementation milestones and acceptance checks](docs/plan.md)
+To check one document:
+
+```bash
+make document-status DOCUMENT_ID=<document UUID>
+```
+
+Status moves through `queued`, `processing`, then `ready` or `failed`. Only `ready` documents are searched.
+
+## 4. Ask a question
+
+```bash
+make demo-ask QUERY="What is deep learning?" TOP_K=5
+```
+
+The response has an `answer` and a `sources` list. Each source has a citation number, the document, the page, and the passage text. If the documents do not contain the answer, the response says so.
+
+Search without an LLM answer:
+
+```bash
+make demo-search QUERY="neurons pass information"
+```
+
+By default the question runs against the demo collection. Override with `COLLECTION_ID=<uuid>`.
+
+## 5. Evaluate answer quality (optional)
+
+This calls paid Gemini and Jina APIs. The API must be running (step 2).
+
+```bash
+make eval-dataset EVAL_PDF="Transformer_Theory_Notes.pdf"
+make eval-run
+```
+
+1. `eval-dataset` builds questions from the PDF pages and saves them to `evals/`.
+2. `eval-run` asks each question through the API and scores the answers. The report is written to `evals/`.
+
+Use `EVAL_LIMIT=5` to score only five questions while you test.
+
+## 6. Logs and troubleshooting
+
+```bash
+make logs          # API and worker logs (JSON lines)
+make down          # stop the stack
+```
+
+| Symptom | Likely cause |
+|---|---|
+| `POSTGRES_PASSWORD` error on `make up` | `.env` is missing the value |
+| OpenSearch container exits | Run the `vm.max_map_count` command in Prerequisites |
+| Document stays `queued` | Worker is not running. Check `make logs`. |
+| Document shows `failed` | Read the worker logs. The database keeps only a safe message. |
+| `/ask` returns 503 | Gemini or Jina key is missing or invalid, or the service is down |
+
+## Development
+
+```bash
+make check         # lint and tests for the API, run in Docker
+```
+
+- API code: `src/app/`. Routes in `api/routes.py`, models in `schema/models.py`, settings in `config/`.
+- Tests: `src/tests/`. Tests use mocks and never call real services.
+- Database migrations: `src/app/db/migrations/`. Applied migrations are not edited.
+- Evaluation script: `ops/rag_eval.py`.
+
+Project rules are in [CLAUDE.md](CLAUDE.md). Change history is in [CHANGELOG.md](CHANGELOG.md).
