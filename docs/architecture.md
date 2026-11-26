@@ -35,7 +35,7 @@ The API lives in `src/app/`. Each folder owns one concern:
 | Folder | Owns |
 |---|---|
 | `api/` | FastAPI entry point (`main.py`) and all HTTP routes (`routes.py`) |
-| `rag/` | Extraction, chunking, indexing, and Celery tasks; `rag/retrieval.py` holds scoped search, rank fusion, and reranking steps; `rag/providers/` holds Jina clients |
+| `rag/` | Extraction, chunking, indexing, and Celery tasks; `rag/retrieval.py` holds scoped search, rank fusion, and reranking steps; `rag/prompts.py` holds all prompt text and the answer-style rules; `rag/providers/` holds Jina clients |
 | `evals/` (in `src/app/evals/`) | Pure scoring of retrieval results against expected pages, used by the runners in `evals/` |
 | `search/` | OpenSearch index mapping and bulk indexing |
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |

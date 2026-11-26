@@ -20,8 +20,8 @@ from app.rag.chat import (
     citations_are_valid,
     cited_ids,
     sse_frame,
-    with_style,
 )
+from app.rag.prompts import with_style
 from app.schema.models import CitedPassage, CollectionIn, Passage
 from app.storage import LocalStorage
 
