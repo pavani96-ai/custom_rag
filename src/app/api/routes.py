@@ -193,8 +193,7 @@ def _accepted(document_id: str, job_id: str, filename: str) -> IngestOut:
 @lru_cache(maxsize=1)
 def get_embedder() -> Embedder:
     """Return the query embedder, created once per process."""
-    settings = get_settings()
-    return JinaEmbedder(settings.jina_api_key, "retrieval.query")
+    return JinaEmbedder(get_settings().jina_api_key, "retrieval.query")
 
 
 @router.post("/collections/{collection_id}/search", response_model=list[Passage])
