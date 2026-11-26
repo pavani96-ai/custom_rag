@@ -1,6 +1,7 @@
 """Application settings. The only module that reads environment variables."""
 
 from functools import lru_cache
+from uuid import UUID
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     web_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
     google_cloud_project: str = ""
     google_cloud_location: str = "global"
+    # Stand-in for the signed-in user until milestone 2. Matches the local dev fixture (0002).
+    dev_user_id: UUID = UUID("00000000-0000-4000-8000-000000000001")
 
 
 @lru_cache

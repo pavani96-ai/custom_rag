@@ -1,6 +1,7 @@
 """Check that answers cite passages from the existing retrieval pipeline."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -46,10 +47,17 @@ def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
     monkeypatch.setattr(answers, "search_collection", search)
     monkeypatch.setattr(httpx, "post", rerank)
     client = Mock()
-    client.models.generate_content.return_value.text = json.dumps(
-        {"answer": "Internal memos are generally sensitive [1].", "source_ids": [1]}
+    client.chat.return_value = SimpleNamespace(
+        message=SimpleNamespace(
+            content=json.dumps(
+                {"answer": "Internal memos are generally sensitive [1].", "source_ids": [1]}
+            )
+        )
     )
-    monkeypatch.setattr(answers, "get_gemini_client", lambda settings: client)
+    monkeypatch.setattr(answers, "build_llm", lambda settings: client)
+    monkeypatch.setattr(
+        answers, "collection_prompt_settings", lambda conn, cid: {"format": "bullets"}
+    )
     monkeypatch.setattr(answers, "get_settings", lambda: Settings(jina_api_key="test"))
 
     result = answers.ask_collection(
@@ -62,14 +70,18 @@ def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
     assert result.sources[0].source_id == 1
     assert result.sources[0].rerank_score == 0.98
     assert [item.passage for item in result.retrieved_contexts] == [passage, other]
-    request = client.models.generate_content.call_args.kwargs
-    assert json.loads(request["contents"])["passages"][0]["text"] == passage.text
+    messages = client.chat.call_args.args[0]
+    assert json.loads(messages[1].content)["passages"][0]["text"] == passage.text
+    assert "bulleted list" in messages[0].content
+    assert client.chat.call_args.kwargs["generation_config"]["response_schema"] is (
+        answers.GeneratedAnswer
+    )
 
 
 def test_empty_retrieval_skips_gemini(monkeypatch) -> None:
     monkeypatch.setattr(answers, "search_collection", lambda *args: [])
     client_factory = Mock()
-    monkeypatch.setattr(answers, "get_gemini_client", client_factory)
+    monkeypatch.setattr(answers, "build_llm", client_factory)
 
     result = answers.ask_collection(uuid4(), SearchIn(query="question"), Mock(), Mock())
 
