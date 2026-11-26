@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
 from app.config.settings import Settings, get_settings
+from app.db.connection import get_db
 from app.db.conversations import (
     collection_prompt_settings,
     conversation_messages,
@@ -71,7 +72,7 @@ from app.schema.models import (
     SearchIn,
     UploadResult,
 )
-from app.storage import ObjectStorage, StorageError, build_storage
+from app.storage import ObjectStorage, StorageError, get_storage
 
 router = APIRouter()
 
@@ -82,17 +83,6 @@ GENERATION_UNAVAILABLE = "Gemini generation is unavailable."
 SEARCH_UNAVAILABLE = "Search service unavailable."
 SAVE_FAILED = "The answer could not be saved."
 INVALID_CITED_ANSWER = "Gemini returned an invalid cited answer."
-
-
-def get_db() -> Iterator[psycopg.Connection]:
-    """Open a database connection for one request."""
-    with psycopg.connect(get_settings().database_url, autocommit=True) as conn:
-        yield conn
-
-
-def get_storage() -> ObjectStorage:
-    """Return the storage adapter selected by APP_MODE."""
-    return build_storage(get_settings())
 
 
 def insert_collection(conn: psycopg.Connection, workspace_id: UUID, body: CollectionIn) -> dict:

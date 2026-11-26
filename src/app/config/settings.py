@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Stand-in for the signed-in user until milestone 2. Matches the local dev fixture (0002).
     dev_user_id: UUID = UUID("00000000-0000-4000-8000-000000000001")
 
+    @property
+    def is_cloud(self) -> bool:
+        """True when the app runs in a cloud environment: any APP_MODE other than local."""
+        return self.app_mode != "local"
+
 
 @lru_cache
 def get_settings() -> Settings:

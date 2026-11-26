@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Protocol
 
-from app.config.settings import Settings
+from app.config.settings import Settings, get_settings
 
 
 class StorageError(Exception):
@@ -81,7 +81,12 @@ class CloudStorage:
 
 
 def build_storage(settings: Settings) -> ObjectStorage:
-    """Pick local folder storage for local mode, Cloud Storage for every other mode."""
-    if settings.app_mode == "local":
-        return LocalStorage(Path(settings.local_storage_path))
-    return CloudStorage()
+    """Pick local folder storage for local mode, Cloud Storage in the cloud."""
+    if settings.is_cloud:
+        return CloudStorage()
+    return LocalStorage(Path(settings.local_storage_path))
+
+
+def get_storage() -> ObjectStorage:
+    """Return the storage adapter for the current settings. Used as a FastAPI dependency."""
+    return build_storage(get_settings())

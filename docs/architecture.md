@@ -39,10 +39,10 @@ The API lives in `src/app/`. Each folder owns one concern:
 | `evals/` (in `src/app/evals/`) | Pure scoring of retrieval results against expected pages, used by the runners in `evals/` |
 | `search/` | OpenSearch index mapping and bulk indexing |
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
-| `config/` | Settings read from environment variables and `.env` |
+| `config/` | Settings read from environment variables and `.env`, including `Settings.is_cloud` |
 | `workers/` | Celery worker app |
-| `db/` | PostgreSQL migration runner and database queries for conversations (`db/conversations.py`) |
-| `storage/` | Original-file storage adapters |
+| `db/` | PostgreSQL migration runner, the per-request connection dependency (`db/connection.py`), and database queries for conversations (`db/conversations.py`) |
+| `storage/` | Original-file storage adapters, including the `get_storage` dependency |
 | `observability/` | Structured JSON logging |
 | `api/main.py` request IDs | Accept only letters, digits, `-`, and `_` up to 64 characters; otherwise generate one |
 

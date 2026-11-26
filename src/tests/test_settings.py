@@ -30,3 +30,10 @@ def test_settings_read_values_from_env_file(tmp_path, monkeypatch) -> None:
     settings = Settings(_env_file=env_file)
 
     assert settings.gemini_judge_model == "file-judge"
+
+
+def test_is_cloud_is_false_only_for_local_mode() -> None:
+    """Local mode is the only non-cloud APP_MODE; every other value counts as cloud."""
+    assert Settings(app_mode="local").is_cloud is False
+    assert Settings(app_mode="cloud").is_cloud is True
+    assert Settings(app_mode="staging").is_cloud is True
