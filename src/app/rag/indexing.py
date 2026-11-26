@@ -4,15 +4,17 @@ from dataclasses import dataclass
 
 import psycopg
 import structlog
+from llama_index.core import StorageContext, VectorStoreIndex
+from llama_index.core.schema import TextNode
 from opensearchpy import OpenSearch
 
+from app.rag.llama_embedding import JinaLlamaEmbedding
 from app.rag.pipeline import Chunk, build_chunks, extract_pages
 from app.rag.providers.embedder import Embedder
-from app.search.opensearch import bulk_index, count_chunks, ensure_index
+from app.search.opensearch import build_vector_store, count_chunks
 from app.storage import ObjectStorage
 
 logger = structlog.stdlib.get_logger(__name__)
-EMBED_BATCH = 32
 
 
 def set_status(conn: psycopg.Connection, job_id: str, document_id: str, status: str) -> None:
@@ -135,34 +137,36 @@ def _load_chunks(
 def _write_chunks(
     embedder: Embedder, search: OpenSearch, chunks: list[Chunk], job: IndexJob
 ) -> None:
-    """Embed the chunks and write them to the search index."""
-    vectors = _embed_all(embedder, [chunk.text for chunk in chunks])
-    ensure_index(search, embedder.dimension)
-    bulk_index(search, _index_documents(chunks, vectors, job))
+    """Embed the chunks through LlamaIndex and write them to the chunk vector store."""
+    if not chunks:
+        return
+    storage = StorageContext.from_defaults(
+        vector_store=build_vector_store(search, embedder.dimension)
+    )
+    nodes = [_chunk_node(chunk, job) for chunk in chunks]
+    VectorStoreIndex(
+        nodes,
+        storage_context=storage,
+        embed_model=JinaLlamaEmbedding(index_embedder=embedder, query_embedder=embedder),
+        show_progress=False,
+    )
 
 
-def _index_documents(
-    chunks: list[Chunk], vectors: list[list[float]], job: IndexJob
-) -> list[dict]:
-    """Build the search documents for each chunk and its vector."""
-    return [
-        {
-            "chunk_id": chunk.chunk_id,
-            "workspace_id": job.workspace_id,
-            "collection_id": job.collection_id,
-            "document_id": job.document_id,
-            "filename": job.filename,
-            "page": chunk.page,
-            "text": chunk.text,
-            "embedding": vector,
-        }
-        for chunk, vector in zip(chunks, vectors, strict=True)
-    ]
-
-
-def _embed_all(embedder: Embedder, texts: list[str]) -> list[list[float]]:
-    """Embed texts in fixed-size batches to bound memory use."""
-    vectors: list[list[float]] = []
-    for start in range(0, len(texts), EMBED_BATCH):
-        vectors.extend(embedder.embed(texts[start : start + EMBED_BATCH]))
-    return vectors
+def _chunk_node(chunk: Chunk, job: IndexJob) -> TextNode:
+    """Build one node with a stable ID. Its metadata is kept out of the embedded text."""
+    metadata = {
+        "chunk_id": chunk.chunk_id,
+        "workspace_id": job.workspace_id,
+        "collection_id": job.collection_id,
+        "source_document_id": job.document_id,
+        "filename": job.filename,
+        "page": chunk.page,
+    }
+    keys = list(metadata)
+    return TextNode(
+        id_=chunk.chunk_id,
+        text=chunk.text,
+        metadata=metadata,
+        excluded_embed_metadata_keys=keys,
+        excluded_llm_metadata_keys=keys,
+    )

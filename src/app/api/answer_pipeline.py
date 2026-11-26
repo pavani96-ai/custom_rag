@@ -15,7 +15,9 @@ from fastapi import HTTPException
 from google.auth.exceptions import GoogleAuthError
 from google.genai import errors
 from httpx import RequestError
+from llama_index.core import VectorStoreIndex
 from llama_index.core.base.llms.types import ChatResponse
+from llama_index.core.vector_stores import MetadataFilters
 from llama_index.llms.google_genai import GoogleGenAI
 from opensearchpy import OpenSearch, OpenSearchException
 from pydantic import ValidationError
@@ -37,6 +39,7 @@ from app.rag.chat import (
     sse_frame,
     stream_answer,
 )
+from app.rag.llama_embedding import JinaLlamaEmbedding
 from app.rag.llm import build_llm, make_messages
 from app.rag.prompts import (
     INSUFFICIENT_EVIDENCE,
@@ -47,7 +50,6 @@ from app.rag.prompts import (
 from app.rag.providers.embedder import Embedder, EmbeddingError
 from app.rag.providers.reranker import RerankError
 from app.rag.retrieval import (
-    SearchTimeout,
     build_search_filters,
     fused_search,
     rerank_passages,
@@ -61,6 +63,7 @@ from app.schema.models import (
     Passage,
     SearchIn,
 )
+from app.search.opensearch import build_vector_store
 
 GENERATION_UNAVAILABLE = "Gemini generation is unavailable."
 SEARCH_UNAVAILABLE = "Search service unavailable."
@@ -90,16 +93,21 @@ def search_passages(
     filters = build_search_filters(str(collection_id), document_ids)
     try:
         return _run_search(filters, body, embedder)
-    except (EmbeddingError, SearchTimeout) as exc:
+    except EmbeddingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except OpenSearchException as exc:
         raise HTTPException(status_code=503, detail=SEARCH_UNAVAILABLE) from exc
 
 
-def _run_search(filters: list[dict], body: SearchIn, embedder: Embedder) -> list[Passage]:
-    """Open the search client, run the fused search, and convert the matches to passages."""
+def _run_search(filters: MetadataFilters, body: SearchIn, embedder: Embedder) -> list[Passage]:
+    """Open the search client, query the chunk index through LlamaIndex, and return passages."""
     with closing(OpenSearch(hosts=[get_settings().opensearch_url], timeout=30)) as client:
-        matches = fused_search(client, filters, body.top_k, embedder, body.query)
+        store = build_vector_store(client, embedder.dimension)
+        index = VectorStoreIndex.from_vector_store(
+            store,
+            embed_model=JinaLlamaEmbedding(index_embedder=embedder, query_embedder=embedder),
+        )
+        matches = fused_search(index, filters, body.top_k, body.query)
     return [to_passage(match) for match in matches]
 
 

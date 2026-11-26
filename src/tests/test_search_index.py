@@ -1,59 +1,51 @@
-"""Tests for the native OpenSearch SDK calls for indexing."""
+"""Tests for the chunk index: the LlamaIndex vector store on the native client, and chunk counts."""
 
-import json
 from unittest.mock import Mock
 
 import pytest
+from opensearchpy import NotFoundError
 
-from app.search.opensearch import (
-    INDEX_NAME,
-    IndexingError,
-    bulk_index,
-    ensure_index,
-    index_definition,
-)
+from app.search.opensearch import INDEX_NAME, IndexingError, build_vector_store, count_chunks
 
 
-def test_index_definition_sets_vector_dimension() -> None:
-    mapping = index_definition(512)["mappings"]["properties"]["embedding"]
-    assert mapping == {"type": "knn_vector", "dimension": 512}
-
-
-def test_ensure_index_creates_missing_index() -> None:
+def test_vector_store_uses_chunk_index_dimension_and_cosine_method() -> None:
+    """The wrapper writes to the chunk index with 512-dim vectors and cosine similarity."""
     client = Mock()
-    client.indices.exists.return_value = False
+    store = build_vector_store(client, 512)
+    wrapper = store._client
+    assert wrapper._index == INDEX_NAME
+    assert wrapper._dim == 512
+    assert wrapper._method["space_type"] == "cosinesimil"
+    assert wrapper._method["engine"] == "lucene"
 
-    ensure_index(client, 512)
 
-    client.indices.exists.assert_called_once_with(index=INDEX_NAME)
-    client.indices.create.assert_called_once_with(index=INDEX_NAME, body=index_definition(512))
-
-
-def test_ensure_index_skips_existing_index() -> None:
+def test_vector_store_uses_the_injected_native_client() -> None:
+    """Our configured client is the one the wrapper talks to, so no second client is built."""
     client = Mock()
-    client.indices.exists.return_value = True
-
-    ensure_index(client, 512)
-
-    client.indices.create.assert_not_called()
+    store = build_vector_store(client, 512)
+    assert store._client._os_client is client
 
 
-def test_bulk_index_sends_ndjson_with_chunk_ids() -> None:
+def test_count_chunks_filters_by_document_id() -> None:
+    """Counts use the keyword form of metadata.document_id, so the match is exact."""
     client = Mock()
-    client.bulk.return_value = {"errors": False}
+    client.count.return_value = {"count": 3, "_shards": {"failed": 0}}
 
-    bulk_index(client, [{"chunk_id": "c1", "text": "hi"}])
-
-    kwargs = client.bulk.call_args.kwargs
-    assert kwargs["params"] == {"refresh": "wait_for"}
-    assert [json.loads(line) for line in kwargs["body"].splitlines()] == [
-        {"index": {"_index": INDEX_NAME, "_id": "c1"}},
-        {"chunk_id": "c1", "text": "hi"},
-    ]
+    assert count_chunks(client, "doc-1") == 3
+    body = client.count.call_args.kwargs["body"]
+    assert body == {"query": {"term": {"metadata.source_document_id.keyword": "doc-1"}}}
 
 
-def test_bulk_index_raises_on_item_errors() -> None:
+def test_count_chunks_returns_none_when_index_is_missing() -> None:
+    """A missing index means no chunks have been written yet."""
     client = Mock()
-    client.bulk.return_value = {"errors": True}
+    client.count.side_effect = NotFoundError(404, "index_not_found_exception", {})
+    assert count_chunks(client, "doc-1") is None
+
+
+def test_count_chunks_raises_on_shard_failures() -> None:
+    """Partial counts are reported as errors, not as a smaller number."""
+    client = Mock()
+    client.count.return_value = {"count": 1, "_shards": {"failed": 1}}
     with pytest.raises(IndexingError):
-        bulk_index(client, [{"chunk_id": "c1"}])
+        count_chunks(client, "doc-1")

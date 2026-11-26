@@ -37,7 +37,7 @@ The API lives in `src/app/`. Each folder owns one concern:
 | `api/` | FastAPI entry point (`main.py`), HTTP route handlers (`routes.py`), the answer pipeline (`answer_pipeline.py`: search, rerank, cited answers, streamed chat), and the upload pipeline (`upload_pipeline.py`) |
 | `rag/` | Extraction, chunking, indexing, and Celery tasks; `rag/retrieval.py` holds scoped search, rank fusion, and reranking steps; `rag/prompts.py` holds all prompt text and the answer-style rules; `rag/providers/` holds Jina clients |
 | `evals/` (in `src/app/evals/`) | Pure scoring of retrieval results against expected pages, used by the runners in `evals/` |
-| `search/` | OpenSearch index mapping and bulk indexing |
+| `search/` | Chunk index on OpenSearch: LlamaIndex's vector store wrapper on the native `opensearch-py` client (`opensearch.py`) |
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
 | `config/` | Settings read from environment variables and `.env`, including `Settings.is_cloud` |
 | `workers/` | Celery worker app (`celery_app.py`) and the queue side of ingestion: recording a stored original as a job and sending it to Celery (`ingest.py`) |

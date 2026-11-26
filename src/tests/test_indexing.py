@@ -98,7 +98,8 @@ def test_ready_document_reuses_existing_chunks(tmp_path: Path, recorded: dict[st
     search.count.return_value = {"count": 3, "_shards": {"failed": 0}}
     assert run(LocalStorage(tmp_path), embedder, search, status="ready") == 3
     search.count.assert_called_once_with(
-        index=INDEX_NAME, body={"query": {"term": {"document_id": "doc-1"}}}
+        index=INDEX_NAME,
+        body={"query": {"term": {"metadata.source_document_id.keyword": "doc-1"}}},
     )
 
     assert recorded["status"] == ["succeeded"]

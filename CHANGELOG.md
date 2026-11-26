@@ -4,6 +4,7 @@ Read at the start of every session. Each date has 4 to 5 short lines. Move old e
 
 ## 2026-11-26
 
+- Chunk index now uses LlamaIndex's OpenSearch vector store (`llama-index-vector-stores-opensearch==1.4.0`) on the native `opensearch-py` client, with approximate k-NN (lucene, cosinesimil). Index `chunks_jina_v5_512_v2`; the old index is not used. Embeddings go through `JinaLlamaEmbedding` (`src/app/rag/llama_embedding.py`), which calls our `JinaEmbedder`. Retrieval runs vector and keyword branches via `VectorStoreIndex` retrievers, fused with RRF-style relative scores. Chunk metadata uses `source_document_id` because LlamaIndex reserves `document_id`. `make check`: 84 passed. Baseline 4 of 5, same cross-document miss.
 - Route helpers moved out of `routes.py`: answer and chat steps to `src/app/api/answer_pipeline.py`, upload steps to `src/app/api/upload_pipeline.py`. Upload validation (`validate_upload`, `MAX_UPLOAD_BYTES`) moved to `src/app/storage/` (no `utils/` folder in the layout). `get_embedder` moved to `rag/providers/embedder.py`. Routes now only check requests and call pipelines. `make check`: 84 passed.
 - Prompt text (`SYSTEM_INSTRUCTION`, `STREAM_INSTRUCTION`, `INSUFFICIENT_EVIDENCE`) and the style rules (`with_style`) moved to `src/app/rag/prompts.py`.
 - Ingest queueing moved out of routes: `queue_document` in `workers/ingest.py` checks the stored original, records the job (`db/jobs.py`), and sends it to Celery. Routes only map a missing original to 409. Storage keys come from `original_key` in `storage/`.

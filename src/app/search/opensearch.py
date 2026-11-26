@@ -1,59 +1,37 @@
-"""OpenSearch access for chunk text and vectors. Uses the native OpenSearch Python SDK."""
+"""Chunk index on OpenSearch: LlamaIndex's vector store wrapper on the native SDK client."""
 
-import json
+from llama_index.vector_stores.opensearch import OpensearchVectorClient, OpensearchVectorStore
+from opensearchpy import NotFoundError, OpenSearch
 
-from opensearchpy import NotFoundError, OpenSearch, RequestError
+from app.config.settings import get_settings
 
-INDEX_NAME = "chunks_jina_v5_512_sentences"
+INDEX_NAME = "chunks_jina_v5_512_v2"
+TEXT_FIELD = "text"
+EMBEDDING_FIELD = "embedding"
+METHOD = {
+    "name": "hnsw",
+    "space_type": "cosinesimil",
+    "engine": "lucene",
+    "parameters": {"ef_construction": 256, "m": 48},
+}
 
 
 class IndexingError(Exception):
-    """Raised when OpenSearch rejects a request or a bulk write has item errors."""
+    """Raised when OpenSearch reports a shard failure while counting chunks."""
 
 
-def index_definition(dimension: int) -> dict:
-    """Return the index settings and mappings for chunk text, vectors, and access fields."""
-    keyword = {"type": "keyword"}
-    return {
-        "settings": {"index": {"knn": True}},
-        "mappings": {
-            "properties": {
-                "chunk_id": keyword,
-                "workspace_id": keyword,
-                "collection_id": keyword,
-                "document_id": keyword,
-                "filename": keyword,
-                "page": {"type": "integer"},
-                "text": {"type": "text"},
-                "embedding": {"type": "knn_vector", "dimension": dimension},
-            }
-        },
-    }
-
-
-def ensure_index(client: OpenSearch, dimension: int) -> None:
-    """Create the chunk index if it does not exist yet."""
-    if client.indices.exists(index=INDEX_NAME):
-        return
-    try:
-        client.indices.create(index=INDEX_NAME, body=index_definition(dimension))
-    except RequestError as exc:
-        if exc.error != "resource_already_exists_exception":
-            raise
-
-
-def bulk_index(client: OpenSearch, documents: list[dict]) -> None:
-    """Write chunk documents in one bulk request. Re-writing a chunk ID replaces it."""
-    if not documents:
-        return
-    lines: list[str] = []
-    for document in documents:
-        lines.append(json.dumps({"index": {"_index": INDEX_NAME, "_id": document["chunk_id"]}}))
-        lines.append(json.dumps(document))
-    body = "\n".join(lines) + "\n"
-    response = client.bulk(body=body, params={"refresh": "wait_for"})
-    if response.get("errors"):
-        raise IndexingError("bulk write reported errors")
+def build_vector_store(client: OpenSearch, dimension: int) -> OpensearchVectorStore:
+    """Return the chunk vector store on the native client. The index is created on first use."""
+    vector_client = OpensearchVectorClient(
+        endpoint=get_settings().opensearch_url,
+        index=INDEX_NAME,
+        dim=dimension,
+        embedding_field=EMBEDDING_FIELD,
+        text_field=TEXT_FIELD,
+        method=METHOD,
+        os_client=client,
+    )
+    return OpensearchVectorStore(client=vector_client)
 
 
 def count_chunks(client: OpenSearch, document_id: str) -> int | None:
@@ -61,7 +39,7 @@ def count_chunks(client: OpenSearch, document_id: str) -> int | None:
     try:
         result = client.count(
             index=INDEX_NAME,
-            body={"query": {"term": {"document_id": document_id}}},
+            body={"query": {"term": {"metadata.source_document_id.keyword": document_id}}},
         )
     except NotFoundError:
         return None

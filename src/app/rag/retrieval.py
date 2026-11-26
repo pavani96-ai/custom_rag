@@ -1,140 +1,64 @@
-"""Retrieval steps: scoped OpenSearch branches, rank fusion, and Jina reranking."""
+"""Retrieval steps: scoped vector and keyword branches on the chunk index, fusion, reranking."""
 
-from typing import Any
-
+from llama_index.core import VectorStoreIndex
 from llama_index.core.llms import MockLLM
-from llama_index.core.retrievers import BaseRetriever, QueryFusionRetriever
-from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
-from opensearchpy import OpenSearch
+from llama_index.core.retrievers import QueryFusionRetriever
+from llama_index.core.schema import NodeWithScore, TextNode
+from llama_index.core.vector_stores import FilterOperator, MetadataFilter, MetadataFilters
+from llama_index.core.vector_stores.types import VectorStoreQueryMode
 
 from app.config.settings import Settings
-from app.rag.providers.embedder import Embedder
 from app.rag.providers.reranker import JinaReranker
 from app.schema.models import CitedPassage, Passage
-from app.search.opensearch import INDEX_NAME
 
-SOURCE_FIELDS = ["chunk_id", "document_id", "filename", "page", "text"]
-METADATA_FIELDS = ("chunk_id", "document_id", "filename", "page")
 VECTOR_WEIGHT = 0.6
 KEYWORD_WEIGHT = 0.4
 
 
-class SearchTimeout(Exception):
-    """OpenSearch did not answer in time."""
-
-
-def build_search_filters(collection_id: str, document_ids: list[str]) -> list[dict[str, Any]]:
+def build_search_filters(collection_id: str, document_ids: list[str]) -> MetadataFilters:
     """Scope a search to one collection and to the given ready documents."""
-    return [
-        {"term": {"collection_id": collection_id}},
-        {"terms": {"document_id": document_ids}},
-    ]
-
-
-class OpenSearchRetriever(BaseRetriever):
-    """Adapt one native OpenSearch search to LlamaIndex nodes."""
-
-    def __init__(
-        self,
-        client: OpenSearch,
-        filters: list[dict[str, Any]],
-        top_k: int,
-        embedder: Embedder | None = None,
-    ) -> None:
-        """Keep the client, scope filters, and result size. Vector search needs an embedder."""
-        super().__init__()
-        self.client = client
-        self.filters = filters
-        self.top_k = top_k
-        self.embedder = embedder
-
-    def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
-        """Run the search and return its hits as nodes with scores."""
-        result = self.client.search(
-            index=INDEX_NAME,
-            params={"ignore_unavailable": "true", "allow_partial_search_results": "false"},
-            body={
-                "size": self.top_k,
-                "_source": SOURCE_FIELDS,
-                "query": self._query(query_bundle.query_str),
-            },
-        )
-        if result["timed_out"]:
-            raise SearchTimeout("Search timed out.")
-        return [_hit_to_node(hit) for hit in result["hits"]["hits"]]
-
-    def _query(self, query: str) -> dict[str, Any]:
-        """Return the vector query when an embedder is set, otherwise the keyword query."""
-        if self.embedder is not None:
-            return self._vector_query(query, self.embedder)
-        return {"bool": {"filter": self.filters, "must": [{"match": {"text": query}}]}}
-
-    def _vector_query(self, query: str, embedder: Embedder) -> dict[str, Any]:
-        """Score filtered chunks by cosine similarity to the embedded query."""
-        (vector,) = embedder.embed([query])
-        return {
-            "script_score": {
-                "query": {"bool": {"filter": self.filters}},
-                "script": {
-                    "lang": "knn",
-                    "source": "knn_score",
-                    "params": {
-                        "field": "embedding",
-                        "query_value": vector,
-                        "space_type": "cosinesimil",
-                    },
-                },
-            }
-        }
-
-
-def _hit_to_node(hit: dict[str, Any]) -> NodeWithScore:
-    """Convert one OpenSearch hit into a node that keeps its citation metadata."""
-    source = hit["_source"]
-    node = TextNode(
-        id_=source["chunk_id"],
-        text=source["text"],
-        metadata={key: source[key] for key in METADATA_FIELDS},
+    return MetadataFilters(
+        filters=[
+            MetadataFilter(key="collection_id", value=collection_id),
+            MetadataFilter(
+                key="source_document_id", value=document_ids, operator=FilterOperator.IN
+            ),
+        ]
     )
-    return NodeWithScore(node=node, score=hit["_score"])
 
 
 def fused_search(
-    client: OpenSearch,
-    filters: list[dict[str, Any]],
-    top_k: int,
-    embedder: Embedder,
-    query: str,
+    index: VectorStoreIndex, filters: MetadataFilters, top_k: int, query: str
 ) -> list[NodeWithScore]:
-    """Run vector and keyword branches, fuse their scores, and return the top matches."""
-    retriever = _fusion_retriever(client, filters, top_k, embedder)
-    return retriever.retrieve(query)
-
-
-def _fusion_retriever(
-    client: OpenSearch, filters: list[dict[str, Any]], top_k: int, embedder: Embedder
-) -> QueryFusionRetriever:
-    """Build the fusion retriever over the two OpenSearch branches."""
-    vector_search = OpenSearchRetriever(client, filters, top_k, embedder)
-    keyword_search = OpenSearchRetriever(client, filters, top_k)
-    return QueryFusionRetriever(
-        [vector_search, keyword_search],
-        mode="relative_score",
+    """Run the vector and keyword branches, fuse their scores, and return the top matches."""
+    vector_branch = index.as_retriever(similarity_top_k=top_k, filters=filters)
+    keyword_branch = index.as_retriever(
+        similarity_top_k=top_k,
+        filters=filters,
+        vector_store_query_mode=VectorStoreQueryMode.TEXT_SEARCH,)
+    fusion = QueryFusionRetriever(
+        [vector_branch, keyword_branch],mode="relative_score",
         retriever_weights=[VECTOR_WEIGHT, KEYWORD_WEIGHT],
         similarity_top_k=top_k,
         num_queries=1,
-        # The constructor expects an LLM. A single query skips generation.
+        # Passing None would make LlamaIndex use its global default LLM (OpenAI, needs a key).
+        # MockLLM is never called: with num_queries=1 the retriever skips query generation.
         llm=MockLLM(),
         use_async=False,
     )
+    return fusion.retrieve(query)
 
 
 def to_passage(match: NodeWithScore) -> Passage:
     """Convert a retrieved node into the public passage model."""
+    meta = match.node.metadata
     return Passage(
+        chunk_id=meta["chunk_id"],
+        document_id=meta["source_document_id"],
+        filename=meta["filename"],
+        page=meta["page"],
         text=match.node.get_content(),
         score=match.get_score(),
-        **match.node.metadata,
     )
 
 
