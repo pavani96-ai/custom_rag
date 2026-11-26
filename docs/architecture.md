@@ -40,7 +40,7 @@ The API lives in `src/app/`. Each folder owns one concern:
 | `search/` | OpenSearch index mapping and bulk indexing |
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
 | `config/` | Settings read from environment variables and `.env`, including `Settings.is_cloud` |
-| `workers/` | Celery worker app |
+| `workers/` | Celery worker app (`celery_app.py`) and the queue side of ingestion: recording a stored original as a job and sending it to Celery (`ingest.py`) |
 | `db/` | PostgreSQL migration runner, the per-request connection dependency (`db/connection.py`), and queries for collections (`db/collections.py`) and conversations (`db/conversations.py`) |
 | `storage/` | Original-file storage adapters, including the `get_storage` dependency |
 | `observability/` | Structured JSON logging |

@@ -57,7 +57,6 @@ from app.rag.retrieval import (
     rerank_passages,
     to_passage,
 )
-from app.rag.tasks import index_document_task
 from app.schema.models import (
     Answer,
     ChatIn,
@@ -76,7 +75,14 @@ from app.schema.models import (
     SearchIn,
     UploadResult,
 )
-from app.storage import ObjectStorage, StorageError, get_storage, store_original
+from app.storage import (
+    ObjectStorage,
+    OriginalNotStoredError,
+    StorageError,
+    get_storage,
+    store_original,
+)
+from app.workers.ingest import queue_document
 
 router = APIRouter()
 
@@ -138,70 +144,6 @@ async def _process_upload(
     return store_original(storage, collection_id, filename, data)
 
 
-def insert_queued(
-    conn: psycopg.Connection,
-    *,
-    workspace_id: str,
-    collection_id: UUID,
-    item: IngestItem,
-    storage_key: str,
-) -> tuple[str, str]:
-    """Insert the document, job, and outbox entry in one transaction. Return their IDs."""
-    document_id = str(uuid4())
-    job_id = str(uuid4())
-    with conn.transaction(), conn.cursor() as cur:
-        _insert_document(cur, workspace_id, collection_id, document_id, item, storage_key)
-        _insert_job_and_outbox(cur, workspace_id, collection_id, document_id, job_id)
-    return document_id, job_id
-
-
-def _insert_document(
-    cur: psycopg.Cursor,
-    workspace_id: str,
-    collection_id: UUID,
-    document_id: str,
-    item: IngestItem,
-    storage_key: str,
-) -> None:
-    """Insert the document row for a stored original."""
-    cur.execute(
-        """
-        INSERT INTO documents
-            (id, workspace_id, collection_id, filename, content_hash,
-             storage_key, storage_generation, uploaded_at)
-        VALUES (%s, %s, %s, %s, %s, %s, 'local', now())
-        """,
-        (document_id, workspace_id, collection_id, item.filename, item.upload_id, storage_key),
-    )
-
-
-def _insert_job_and_outbox(
-    cur: psycopg.Cursor, workspace_id: str, collection_id: UUID, document_id: str, job_id: str
-) -> None:
-    """Insert the indexing job and its outbox message for the document."""
-    cur.execute(
-        """
-        INSERT INTO jobs (id, workspace_id, collection_id, document_id, kind)
-        VALUES (%s, %s, %s, %s, 'index')
-        """,
-        (job_id, workspace_id, collection_id, document_id),
-    )
-    cur.execute(
-        "INSERT INTO outbox (job_id, topic, payload) VALUES (%s, 'ingestion.index_document', "
-        "jsonb_build_object('job_id', %s::text, 'document_id', %s::text))",
-        (job_id, job_id, document_id),
-    )
-
-
-def mark_published(conn: psycopg.Connection, job_id: str) -> None:
-    """Record that the queue accepted the job."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE outbox SET published_at = now() WHERE job_id = %s AND published_at IS NULL",
-            (job_id,),
-        )
-
-
 @router.post(
     "/collections/{collection_id}/documents/ingest",
     status_code=status.HTTP_202_ACCEPTED,
@@ -230,50 +172,11 @@ def _queue_one(
     item: IngestItem,
 ) -> IngestOut:
     """Queue indexing for one stored original and return its job IDs. 409 if not stored."""
-    storage_key = _require_stored(storage, collection_id, item)
-    return _enqueue(conn, collection_id, workspace_id, item, storage_key)
-
-
-def _require_stored(storage: ObjectStorage, collection_id: UUID, item: IngestItem) -> str:
-    """Return the storage key of a stored original. 409 when it is missing."""
-    storage_key = f"collections/{collection_id}/originals/{item.upload_id}.pdf"
-    if not storage.exists(storage_key):
-        raise HTTPException(status_code=409, detail=f"Original not stored: {item.filename}")
-    return storage_key
-
-
-def _dispatch(
-    conn: psycopg.Connection,
-    job_id: str,
-    document_id: str,
-    collection_id: UUID,
-    workspace_id: str,
-    filename: str,
-    storage_key: str,
-) -> None:
-    """Hand one indexing job to the Celery worker, then mark the outbox entry published."""
-    index_document_task.delay(
-        job_id, document_id, str(collection_id), workspace_id, filename, storage_key
-    )
-    mark_published(conn, job_id)
-
-
-def _enqueue(
-    conn: psycopg.Connection,
-    collection_id: UUID,
-    workspace_id: str,
-    item: IngestItem,
-    storage_key: str,
-) -> IngestOut:
-    """Record the document and job, hand the job to the worker, and return its IDs."""
-    document_id, job_id = insert_queued(
-        conn,
-        workspace_id=workspace_id,
-        collection_id=collection_id,
-        item=item,
-        storage_key=storage_key,
-    )
-    _dispatch(conn, job_id, document_id, collection_id, workspace_id, item.filename, storage_key)
+    try:
+        document_id, job_id = queue_document(conn, storage, collection_id, workspace_id, item)
+    except OriginalNotStoredError as exc:
+        detail = f"Original not stored: {item.filename}"
+        raise HTTPException(status_code=409, detail=detail) from exc
     return _accepted(document_id, job_id, item.filename)
 
 

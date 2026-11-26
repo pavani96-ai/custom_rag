@@ -4,6 +4,7 @@ Read at the start of every session. Each date has 4 to 5 short lines. Move old e
 
 ## 2026-11-26
 
+- Ingest queueing moved out of routes: `queue_document` in `workers/ingest.py` checks the stored original, records the job (`db/jobs.py`), and sends it to Celery. Routes only map a missing original to 409. Storage keys come from `original_key` in `storage/`.
 - Collection queries (`insert_collection`, `collection_exists`, `collection_workspace`, `ready_document_ids`) moved to `src/app/db/collections.py`; `store_one` became `store_original` in `src/app/storage/`. Routes only wire them up.
 - Dependencies moved to their owners: `get_db` to `src/app/db/connection.py`, `get_storage` to `src/app/storage/`. Storage picks its adapter with `Settings.is_cloud` instead of comparing `app_mode` strings. `make check`: 84 passed.
 - Production-code review fixes: split long functions (routes, indexing, retrieval, providers, conversations, tasks) into named helpers under 20 lines; retrieval moved to `rag/retrieval.py`; `IndexJob` bundles indexing arguments; request IDs must use letters, digits, `-`, `_`; middleware typed; eval scoring moved to `src/app/evals/scoring.py` with tests. Single-document cases now hit on any accepted page (previously accepted pages could not count alone). `make check` passes (83 API tests). Rebuilt API and worker: baseline unchanged (4 of 5), chat stream and ingest verified.

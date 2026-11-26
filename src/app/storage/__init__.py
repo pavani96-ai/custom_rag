@@ -13,6 +13,23 @@ class StorageError(Exception):
     """Raised when an original cannot be written to storage."""
 
 
+class OriginalNotStoredError(Exception):
+    """The original for an upload ID is not in storage, so it cannot be indexed."""
+
+
+def original_key(collection_id: UUID, upload_id: str) -> str:
+    """Return the storage key of a PDF original, derived from its SHA-256 upload ID."""
+    return f"collections/{collection_id}/originals/{upload_id}.pdf"
+
+
+def require_original(storage: "ObjectStorage", collection_id: UUID, upload_id: str) -> str:
+    """Return the key of a stored original, or raise OriginalNotStoredError."""
+    key = original_key(collection_id, upload_id)
+    if not storage.exists(key):
+        raise OriginalNotStoredError(upload_id)
+    return key
+
+
 class ObjectStorage(Protocol):
     """Write-once storage keyed by relative paths such as collections/<id>/originals/<sha>.pdf."""
 
@@ -100,7 +117,7 @@ def store_original(
 ) -> UploadResult:
     """Store one validated original under a key derived from its SHA-256 hash."""
     digest = hashlib.sha256(data).hexdigest()
-    key = f"collections/{collection_id}/originals/{digest}.pdf"
+    key = original_key(collection_id, digest)
     try:
         storage.save(key, data)
     except (StorageError, NotImplementedError) as error:

@@ -10,6 +10,7 @@ from app.api import routes as routes
 from app.api.main import app
 from app.api.routes import get_db, get_storage
 from app.storage import LocalStorage
+from app.workers import ingest
 
 SHA = "a" * 64
 
@@ -21,17 +22,17 @@ def queued(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     monkeypatch.setattr(routes, "collection_exists", lambda conn, cid: True)
     monkeypatch.setattr(routes, "collection_workspace", lambda conn, cid: str(uuid4()))
     monkeypatch.setattr(
-        routes,
+        ingest,
         "insert_queued",
         lambda conn, **kwargs: (str(uuid4()), str(uuid4())),
     )
-    monkeypatch.setattr(routes, "mark_published", lambda conn, job_id: None)
+    monkeypatch.setattr(ingest, "mark_published", lambda conn, job_id: None)
 
     class FakeTask:
         def delay(self, *args):  # type: ignore[no-untyped-def]
             calls.append(args)
 
-    monkeypatch.setattr(routes, "index_document_task", FakeTask())
+    monkeypatch.setattr(ingest, "index_document_task", FakeTask())
     return calls
 
 
