@@ -35,14 +35,15 @@ The API lives in `src/app/`. Each folder owns one concern:
 | Folder | Owns |
 |---|---|
 | `api/` | FastAPI entry point (`main.py`), HTTP route handlers (`routes.py`), the answer pipeline (`answer_pipeline.py`: search, rerank, cited answers, streamed chat), and the upload pipeline (`upload_pipeline.py`) |
-| `rag/` | Extraction, chunking, indexing, and Celery tasks; `rag/retrieval.py` holds scoped search, rank fusion, and reranking steps; `rag/prompts.py` holds all prompt text and the answer-style rules; `rag/providers/` holds Jina clients |
+| `rag/` | Extraction, chunking, and indexing; `rag/retrieval.py` holds scoped search, rank fusion, and reranking steps; `rag/prompts.py` holds all prompt text and the answer-style rules; `rag/embedder.py` holds the Jina embedding client |
 | `evals/` (in `src/app/evals/`) | Pure scoring of retrieval results against expected pages, used by the runners in `evals/` |
-| `search/` | Chunk index on OpenSearch: LlamaIndex's vector store wrapper on the native `opensearch-py` client (`opensearch.py`) |
+| `rag/vectorstore.py` | Chunk index on OpenSearch: LlamaIndex's vector store wrapper on the native `opensearch-py` client, plus chunk counts |
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
 | `config/` | Settings read from environment variables and `.env`, including `Settings.is_cloud` |
 | `workers/` | Celery worker app (`celery_app.py`) and the queue side of ingestion: recording a stored original as a job and sending it to Celery (`ingest.py`) |
 | `db/` | PostgreSQL migration runner, the per-request connection dependency (`db/connection.py`), and queries for collections (`db/collections.py`) and conversations (`db/conversations.py`) |
-| `storage/` | Original-file storage adapters, including the `get_storage` dependency |
+| `exception_handling/` | Domain exceptions shared by storage, providers, search, and ingest (`exceptions.py`); routes map them to HTTP responses |
+| `rag/document_storage.py` | Original-file storage: upload validation, stored-original keys, local and Cloud Storage adapters, and the `get_storage` dependency |
 | `observability/` | Structured JSON logging |
 | `api/main.py` request IDs | Accept only letters, digits, `-`, and `_` up to 64 characters; otherwise generate one |
 

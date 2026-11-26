@@ -51,7 +51,7 @@
     <rect x="680" y="110" width="170" height="110" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
     <text x="765" y="138" text-anchor="middle" class="name">Celery worker</text>
     <text x="765" y="158" text-anchor="middle" class="tech">src/app/rag/indexing.py</text>
-    <text x="765" y="178" text-anchor="middle" class="step">pypdf, SentenceSplitter</text>
+    <text x="765" y="178" text-anchor="middle" class="step">LlamaIndex PDFReader, SentenceSplitter</text>
     <text x="765" y="196" text-anchor="middle" class="step">Chunk IDs from text hash</text>
   </g>
   <g>

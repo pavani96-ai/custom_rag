@@ -6,10 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
-MAX_BATCH = 50
-SHA256_LENGTH = 64
-
-
 ResponseFormat = Literal["auto", "prose", "bullets"]
 ResponseLength = Literal["brief", "standard", "detailed"]
 
@@ -50,14 +46,15 @@ class UploadResult(BaseModel):
 class IngestItem(BaseModel):
     """One stored original to index: the upload ID from the upload response, and its name."""
 
-    upload_id: str = Field(min_length=SHA256_LENGTH, max_length=SHA256_LENGTH)
+    # A SHA-256 hex digest is always 64 characters.
+    upload_id: str = Field(min_length=64, max_length=64)
     filename: str = Field(min_length=1, max_length=255)
 
 
 class IngestIn(BaseModel):
-    """A batch of finalized uploads to index."""
+    """A batch of finalized uploads to index. The batch size limit is checked in the route."""
 
-    documents: list[IngestItem] = Field(min_length=1, max_length=MAX_BATCH)
+    documents: list[IngestItem] = Field(min_length=1)
 
 
 class IngestOut(BaseModel):

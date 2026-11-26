@@ -22,11 +22,10 @@ At the end of each session, add a dated entry to CHANGELOG.md. Move entries that
 
 - `apps/web/`: Next.js UI
 - `src/app/api/`: FastAPI app (`main.py`) and all HTTP routes (`routes.py`)
-- `src/app/rag/`: extraction, chunking, indexing, Celery tasks; `rag/providers/` holds Jina embedding and reranking clients
-- `src/app/search/`: OpenSearch index mapping and bulk indexing (`opensearch.py`)
-- `src/app/config/`: settings from environment and `.env`; `src/app/workers/`: Celery app
+- `src/app/rag/`: extraction, chunking, indexing, OpenSearch chunk index (`vectorstore.py`); `rag/embedder.py` holds the Jina embedding client
+- `src/app/config/`: settings from environment and `.env`; `src/app/workers/`: Celery app and tasks (`tasks.py`)
 - `src/app/schema/models.py`: every Pydantic request, response, and provider payload model
-- `src/app/db/`: migration runner, SQL migrations (`db/migrations/`), and conversation queries (`conversations.py`); `src/app/storage/`: original-file storage; `src/app/observability/`: JSON logs
+- `src/app/db/`: migration runner, SQL migrations (`db/migrations/`), and conversation queries (`conversations.py`); original-file storage in `src/app/rag/document_storage.py`; `src/app/observability/`: JSON logs
 - `src/tests/`, `ops/api.Dockerfile`: API image (build context is `src/`)
 - `evals/`, `ops/`, `infra/terraform/`
 

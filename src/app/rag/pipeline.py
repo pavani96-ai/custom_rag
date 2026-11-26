@@ -1,18 +1,18 @@
 """Pure ingest steps: read PDF pages, split them into chunks, and derive stable chunk IDs."""
 
 import hashlib
-import io
 from dataclasses import dataclass
-from uuid import NAMESPACE_URL, uuid5
+from pathlib import PurePosixPath
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from fsspec.implementations.memory import MemoryFileSystem
 from llama_index.core import Document
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import BaseNode
-from pypdf import PdfReader
+from llama_index.readers.file import PDFReader
 
-CHUNK_CHARS = 800
-OVERLAP_CHARS = 100
+from app.config.settings import Settings
 
 
 @dataclass(frozen=True)
@@ -31,8 +31,15 @@ def normalize(text: str) -> str:
 
 def extract_pages(data: bytes) -> list[str]:
     """Return the extracted text of each PDF page, in page order."""
-    reader = PdfReader(io.BytesIO(data))
-    return [page.extract_text() or "" for page in reader.pages]
+    fs = MemoryFileSystem()
+    path = PurePosixPath(f"/{uuid4().hex}.pdf")
+    with fs.open(str(path), "wb") as handle:
+        handle.write(data)
+    try:
+        documents = PDFReader().load_data(path, fs=fs)
+    finally:
+        fs.rm(str(path))
+    return [document.text for document in documents]
 
 
 def chunk_id_for(document_id: str, page: int, index: int, text: str) -> str:
@@ -42,12 +49,12 @@ def chunk_id_for(document_id: str, page: int, index: int, text: str) -> str:
     return str(uuid5(NAMESPACE_URL, locator))
 
 
-def build_chunks(document_id: str, pages: list[str]) -> list[Chunk]:
+def build_chunks(document_id: str, pages: list[str], settings: Settings) -> list[Chunk]:
     """Split every page into chunks, numbering pages from 1."""
     documents = _page_documents(document_id, pages)
     if not documents:
         return []
-    nodes = _split_documents(documents)
+    nodes = _split_documents(documents, settings)
     return _to_chunks(document_id, nodes)
 
 
@@ -65,11 +72,11 @@ def _page_documents(document_id: str, pages: list[str]) -> list[Document]:
     ]
 
 
-def _split_documents(documents: list[Document]) -> list[BaseNode]:
+def _split_documents(documents: list[Document], settings: Settings) -> list[BaseNode]:
     """Split page documents by character budget, using raw text for the chunk size."""
     splitter = SentenceSplitter(
-        chunk_size=CHUNK_CHARS,
-        chunk_overlap=OVERLAP_CHARS,
+        chunk_size=settings.chunk_chars,
+        chunk_overlap=settings.chunk_overlap_chars,
         tokenizer=list,
         include_prev_next_rel=False,
     )

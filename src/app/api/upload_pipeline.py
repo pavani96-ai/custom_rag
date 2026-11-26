@@ -9,24 +9,24 @@ from uuid import UUID
 import psycopg
 from fastapi import HTTPException, UploadFile
 
-from app.schema.models import IngestItem, IngestOut, UploadResult
-from app.storage import (
-    MAX_UPLOAD_BYTES,
+from app.config.settings import Settings
+from app.exception_handling.exceptions import OriginalNotStoredError
+from app.rag.document_storage import (
     ObjectStorage,
-    OriginalNotStoredError,
     store_original,
     validate_upload,
 )
+from app.schema.models import IngestItem, IngestOut, UploadResult
 from app.workers.ingest import queue_document
 
 
 async def process_upload(
-    storage: ObjectStorage, collection_id: UUID, upload: UploadFile
+    storage: ObjectStorage, collection_id: UUID, upload: UploadFile, settings: Settings
 ) -> UploadResult:
     """Read one upload, reject it if invalid, otherwise store it."""
     filename = upload.filename or ""
-    data = await upload.read(MAX_UPLOAD_BYTES + 1)
-    problem = validate_upload(filename, data)
+    data = await upload.read(settings.max_upload_bytes + 1)
+    problem = validate_upload(filename, data, settings)
     if problem:
         return UploadResult(filename=filename, status="failed", error=problem)
     return store_original(storage, collection_id, filename, data)

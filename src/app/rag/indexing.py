@@ -8,56 +8,15 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.schema import TextNode
 from opensearchpy import OpenSearch
 
-from app.rag.llama_embedding import JinaLlamaEmbedding
+from app.config.settings import Settings
+from app.db.jobs import record_failure, record_success, set_status
+from app.rag.document_storage import ObjectStorage
+from app.rag.embedder import Embedder
+from app.rag.llm import JinaLlamaEmbedding
 from app.rag.pipeline import Chunk, build_chunks, extract_pages
-from app.rag.providers.embedder import Embedder
-from app.search.opensearch import build_vector_store, count_chunks
-from app.storage import ObjectStorage
+from app.rag.vectorstore import build_vector_store, count_chunks
 
 logger = structlog.stdlib.get_logger(__name__)
-
-
-def set_status(conn: psycopg.Connection, job_id: str, document_id: str, status: str) -> None:
-    """Move the job and its document to a new status in one transaction."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            "UPDATE jobs SET status = %s, updated_at = now() WHERE id = %s",
-            (status, job_id),
-        )
-        cur.execute(
-            "UPDATE documents SET status = %s, updated_at = now() WHERE id = %s",
-            (_document_status(status), document_id),
-        )
-
-
-def _document_status(job_status: str) -> str:
-    """Map a job status to the document status the UI shows."""
-    return {"running": "processing", "succeeded": "ready", "failed": "failed"}[job_status]
-
-
-def record_failure(conn: psycopg.Connection, job_id: str, document_id: str) -> None:
-    """Mark the job and document failed with a safe message. Raw errors stay in worker logs."""
-    message = "Indexing failed. An operator can find details in the worker logs."
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            "UPDATE jobs SET status = 'failed', error_message = %s, updated_at = now() "
-            "WHERE id = %s",
-            (message, job_id),
-        )
-        cur.execute(
-            "UPDATE documents SET status = 'failed', error_message = %s, updated_at = now() "
-            "WHERE id = %s",
-            (message, document_id),
-        )
-
-
-def record_success(conn: psycopg.Connection, job_id: str, document_id: str, pages: int) -> None:
-    """Store the page count and mark the job and document as finished."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            "UPDATE documents SET page_count = %s WHERE id = %s", (pages, document_id)
-        )
-    set_status(conn, job_id, document_id, "succeeded")
 
 
 @dataclass(frozen=True)
@@ -79,14 +38,15 @@ def index_document(
     embedder: Embedder,
     search: OpenSearch,
     job: IndexJob,
+    settings: Settings,
 ) -> int:
     """Run the full indexing steps for one document and return its chunk count."""
-    reused = _reuse_ready_index(conn, search, job.job_id, job.document_id)
+    reused = _reuse_ready_index(conn, search, job.job_id, job.document_id, settings)
     if reused is not None:
         return reused
 
     set_status(conn, job.job_id, job.document_id, "running")
-    return _run_steps(conn, storage, embedder, search, job)
+    return _run_steps(conn, storage, embedder, search, job, settings)
 
 
 def _run_steps(
@@ -95,11 +55,12 @@ def _run_steps(
     embedder: Embedder,
     search: OpenSearch,
     job: IndexJob,
+    settings: Settings,
 ) -> int:
     """Load, chunk, embed, and write one document, then record success or failure."""
     try:
-        pages, chunks = _load_chunks(storage, job.storage_key, job.document_id)
-        _write_chunks(embedder, search, chunks, job)
+        pages, chunks = _load_chunks(storage, job.storage_key, job.document_id, settings)
+        _write_chunks(embedder, search, chunks, job, settings)
     except Exception:
         logger.exception("index_failed", job_id=job.job_id, document_id=job.document_id)
         record_failure(conn, job.job_id, job.document_id)
@@ -110,7 +71,11 @@ def _run_steps(
 
 
 def _reuse_ready_index(
-    conn: psycopg.Connection, search: OpenSearch, job_id: str, document_id: str
+    conn: psycopg.Connection,
+    search: OpenSearch,
+    job_id: str,
+    document_id: str,
+    settings: Settings,
 ) -> int | None:
     """Return the existing chunk count when a ready document is already indexed, else None."""
     with conn.cursor() as cur:
@@ -118,7 +83,7 @@ def _reuse_ready_index(
         row = cur.fetchone()
     if row != ("ready",):
         return None
-    chunk_count = count_chunks(search, document_id)
+    chunk_count = count_chunks(search, document_id, settings)
     if not chunk_count:
         return None
     set_status(conn, job_id, document_id, "succeeded")
@@ -127,27 +92,31 @@ def _reuse_ready_index(
 
 
 def _load_chunks(
-    storage: ObjectStorage, storage_key: str, document_id: str
+    storage: ObjectStorage, storage_key: str, document_id: str, settings: Settings
 ) -> tuple[int, list[Chunk]]:
     """Read the stored PDF and return its page count and chunks."""
     pages = extract_pages(storage.load(storage_key))
-    return len(pages), build_chunks(document_id, pages)
+    return len(pages), build_chunks(document_id, pages, settings)
 
 
 def _write_chunks(
-    embedder: Embedder, search: OpenSearch, chunks: list[Chunk], job: IndexJob
+    embedder: Embedder,
+    search: OpenSearch,
+    chunks: list[Chunk],
+    job: IndexJob,
+    settings: Settings,
 ) -> None:
     """Embed the chunks through LlamaIndex and write them to the chunk vector store."""
     if not chunks:
         return
     storage = StorageContext.from_defaults(
-        vector_store=build_vector_store(search, embedder.dimension)
+        vector_store=build_vector_store(search, embedder.dimension, settings)
     )
     nodes = [_chunk_node(chunk, job) for chunk in chunks]
     VectorStoreIndex(
         nodes,
         storage_context=storage,
-        embed_model=JinaLlamaEmbedding(index_embedder=embedder, query_embedder=embedder),
+        embed_model=JinaLlamaEmbedding(embedder, embedder, settings.embed_batch_size),
         show_progress=False,
     )
 

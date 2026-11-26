@@ -5,9 +5,9 @@ from uuid import UUID
 import psycopg
 
 from app.db.jobs import insert_queued, mark_published
-from app.rag.tasks import index_document_task
+from app.rag.document_storage import ObjectStorage, require_original
 from app.schema.models import IngestItem
-from app.storage import ObjectStorage, require_original
+from app.workers.tasks import index_document_task
 
 
 def queue_document(

@@ -22,7 +22,7 @@ from llama_index.llms.google_genai import GoogleGenAI
 from opensearchpy import OpenSearch, OpenSearchException
 from pydantic import ValidationError
 
-from app.config.settings import Settings, get_settings
+from app.config.settings import Settings
 from app.db.collections import ready_document_ids
 from app.db.conversations import (
     collection_prompt_settings,
@@ -31,6 +31,7 @@ from app.db.conversations import (
     load_history,
     save_turn,
 )
+from app.exception_handling.exceptions import EmbeddingError, RerankError
 from app.rag.chat import (
     build_contents,
     citations_are_valid,
@@ -39,22 +40,21 @@ from app.rag.chat import (
     sse_frame,
     stream_answer,
 )
-from app.rag.llama_embedding import JinaLlamaEmbedding
-from app.rag.llm import build_llm, make_messages
+from app.rag.embedder import Embedder
+from app.rag.llm import JinaLlamaEmbedding, build_llm, make_messages
 from app.rag.prompts import (
     INSUFFICIENT_EVIDENCE,
     STREAM_INSTRUCTION,
     SYSTEM_INSTRUCTION,
     with_style,
 )
-from app.rag.providers.embedder import Embedder, EmbeddingError
-from app.rag.providers.reranker import RerankError
 from app.rag.retrieval import (
     build_search_filters,
     fused_search,
     rerank_passages,
     to_passage,
 )
+from app.rag.vectorstore import build_vector_store
 from app.schema.models import (
     Answer,
     ChatIn,
@@ -63,7 +63,6 @@ from app.schema.models import (
     Passage,
     SearchIn,
 )
-from app.search.opensearch import build_vector_store
 
 GENERATION_UNAVAILABLE = "Gemini generation is unavailable."
 SEARCH_UNAVAILABLE = "Search service unavailable."
@@ -84,7 +83,11 @@ SEARCH_UNAVAILABLE = "Search service unavailable."
 
 
 def search_passages(
-    conn: psycopg.Connection, collection_id: UUID, body: SearchIn, embedder: Embedder
+    conn: psycopg.Connection,
+    collection_id: UUID,
+    body: SearchIn,
+    embedder: Embedder,
+    settings: Settings,
 ) -> list[Passage]:
     """Rank passages from ready documents in the collection. 503 when search is unavailable."""
     document_ids = ready_document_ids(conn, collection_id)
@@ -92,22 +95,24 @@ def search_passages(
         return []
     filters = build_search_filters(str(collection_id), document_ids)
     try:
-        return _run_search(filters, body, embedder)
+        return _run_search(filters, body, embedder, settings)
     except EmbeddingError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except OpenSearchException as exc:
         raise HTTPException(status_code=503, detail=SEARCH_UNAVAILABLE) from exc
 
 
-def _run_search(filters: MetadataFilters, body: SearchIn, embedder: Embedder) -> list[Passage]:
+def _run_search(
+    filters: MetadataFilters, body: SearchIn, embedder: Embedder, settings: Settings
+) -> list[Passage]:
     """Open the search client, query the chunk index through LlamaIndex, and return passages."""
-    with closing(OpenSearch(hosts=[get_settings().opensearch_url], timeout=30)) as client:
-        store = build_vector_store(client, embedder.dimension)
+    with closing(OpenSearch(hosts=[settings.opensearch_url], timeout=30)) as client:
+        store = build_vector_store(client, embedder.dimension, settings)
         index = VectorStoreIndex.from_vector_store(
             store,
-            embed_model=JinaLlamaEmbedding(index_embedder=embedder, query_embedder=embedder),
+            embed_model=JinaLlamaEmbedding(embedder, embedder, settings.embed_batch_size),
         )
-        matches = fused_search(index, filters, body.top_k, body.query)
+        matches = fused_search(index, filters, body.top_k, body.query, settings)
     return [to_passage(match) for match in matches]
 
 
@@ -233,7 +238,9 @@ def retrieve_for_question(
     settings: Settings,
 ) -> list[CitedPassage]:
     """Return the reranked passages that may support an answer. Empty when nothing matched."""
-    passages = search_passages(conn, collection_id, SearchIn(query=query, top_k=20), embedder)
+    passages = search_passages(
+        conn, collection_id, SearchIn(query=query, top_k=20), embedder, settings
+    )
     return rerank_sources(passages, query, 5, settings)
 
 

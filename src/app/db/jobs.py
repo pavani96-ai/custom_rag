@@ -85,3 +85,46 @@ def mark_published(conn: psycopg.Connection, job_id: str) -> None:
             "UPDATE outbox SET published_at = now() WHERE job_id = %s AND published_at IS NULL",
             (job_id,),
         )
+
+
+def set_status(conn: psycopg.Connection, job_id: str, document_id: str, status: str) -> None:
+    """Move the job and its document to a new status in one transaction."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE jobs SET status = %s, updated_at = now() WHERE id = %s",
+            (status, job_id),
+        )
+        cur.execute(
+            "UPDATE documents SET status = %s, updated_at = now() WHERE id = %s",
+            (_document_status(status), document_id),
+        )
+
+
+def _document_status(job_status: str) -> str:
+    """Map a job status to the document status the UI shows."""
+    return {"running": "processing", "succeeded": "ready", "failed": "failed"}[job_status]
+
+
+def record_failure(conn: psycopg.Connection, job_id: str, document_id: str) -> None:
+    """Mark the job and document failed with a safe message. Raw errors stay in worker logs."""
+    message = "Indexing failed. An operator can find details in the worker logs."
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE jobs SET status = 'failed', error_message = %s, updated_at = now() "
+            "WHERE id = %s",
+            (message, job_id),
+        )
+        cur.execute(
+            "UPDATE documents SET status = 'failed', error_message = %s, updated_at = now() "
+            "WHERE id = %s",
+            (message, document_id),
+        )
+
+
+def record_success(conn: psycopg.Connection, job_id: str, document_id: str, pages: int) -> None:
+    """Store the page count and mark the job and document as finished."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE documents SET page_count = %s WHERE id = %s", (pages, document_id)
+        )
+    set_status(conn, job_id, document_id, "succeeded")

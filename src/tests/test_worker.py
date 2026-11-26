@@ -1,7 +1,7 @@
 """Tests for the Celery worker wiring. The broker is never contacted."""
 
-from app.rag.tasks import heartbeat
 from app.workers.celery_app import celery_app
+from app.workers.tasks import heartbeat
 
 
 def test_heartbeat_task_is_registered() -> None:

@@ -19,7 +19,7 @@ from app.api.answer_pipeline import (
     search_passages,
 )
 from app.api.upload_pipeline import process_upload, queue_one
-from app.config.settings import get_settings
+from app.config.settings import Settings, get_settings
 from app.db.collections import collection_exists, collection_workspace, insert_collection
 from app.db.connection import get_db
 from app.db.conversations import (
@@ -29,8 +29,10 @@ from app.db.conversations import (
     list_conversations,
 )
 from app.db.jobs import job_status
+from app.exception_handling.exceptions import StorageError
+from app.rag.document_storage import ObjectStorage, get_storage
+from app.rag.embedder import Embedder, get_embedder
 from app.rag.prompts import INSUFFICIENT_EVIDENCE
-from app.rag.providers.embedder import Embedder, get_embedder
 from app.schema.models import (
     Answer,
     ChatIn,
@@ -46,7 +48,6 @@ from app.schema.models import (
     SearchIn,
     UploadResult,
 )
-from app.storage import ObjectStorage, StorageError, get_storage
 
 router = APIRouter()
 
@@ -67,6 +68,7 @@ async def upload_files(
     files: list[UploadFile],
     conn: psycopg.Connection = Depends(get_db),
     storage: ObjectStorage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
 ) -> list[UploadResult]:
     """Store each uploaded PDF and report the outcome per file. Nothing is indexed here."""
     if not collection_exists(conn, collection_id):
@@ -74,7 +76,7 @@ async def upload_files(
             UploadResult(filename=f.filename or "", status="failed", error="Unknown collection.")
             for f in files
         ]
-    return [await process_upload(storage, collection_id, upload) for upload in files]
+    return [await process_upload(storage, collection_id, upload, settings) for upload in files]
 
 
 @router.post(
@@ -87,12 +89,23 @@ def ingest_documents(
     body: IngestIn,
     conn: psycopg.Connection = Depends(get_db),
     storage: ObjectStorage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
 ) -> list[IngestOut]:
     """Queue indexing for stored originals. Each file must already be in storage."""
+    _check_batch_size(body, settings)
     if not collection_exists(conn, collection_id):
         raise HTTPException(status_code=404, detail="Unknown collection.")
     workspace_id = collection_workspace(conn, collection_id)
     return [queue_one(conn, storage, collection_id, workspace_id, item) for item in body.documents]
+
+
+def _check_batch_size(body: IngestIn, settings: Settings) -> None:
+    """Reject an ingest request that lists more originals than the configured batch limit."""
+    if len(body.documents) > settings.max_batch_files:
+        raise HTTPException(
+            status_code=422,
+            detail=f"At most {settings.max_batch_files} files per ingest request.",
+        )
 
 
 @router.post("/collections/{collection_id}/search", response_model=list[Passage])
@@ -101,11 +114,12 @@ def search_collection(
     body: SearchIn,
     conn: psycopg.Connection = Depends(get_db),
     embedder: Embedder = Depends(get_embedder),
+    settings: Settings = Depends(get_settings),
 ) -> list[Passage]:
     """Rank passages from ready documents in the collection using semantic and keyword search."""
     if not collection_exists(conn, collection_id):
         raise HTTPException(status_code=404, detail="Unknown collection.")
-    return search_passages(conn, collection_id, body, embedder)
+    return search_passages(conn, collection_id, body, embedder, settings)
 
 
 @router.post(
@@ -117,17 +131,17 @@ def ask_collection(
     conn: psycopg.Connection = Depends(get_db),
     embedder: Embedder = Depends(get_embedder),
     include_contexts: bool = False,
+    settings: Settings = Depends(get_settings),
 ) -> Answer:
     """Answer one question and identify the retrieved passages that support it."""
     candidates = body.model_copy(update={"top_k": 20})
-    passages = search_collection(collection_id, candidates, conn, embedder)
+    passages = search_collection(collection_id, candidates, conn, embedder, settings)
     if not passages:
         return Answer(
             answer=INSUFFICIENT_EVIDENCE,
             sources=[],
             retrieved_contexts=[] if include_contexts else None,
         )
-    settings = get_settings()
     sources = rerank_sources(passages, body.query, min(body.top_k, 5), settings)
     generated = generate_answer(conn, collection_id, body.query, sources, settings)
     return answer_from_generated(generated, sources, include_contexts)
@@ -139,11 +153,11 @@ def chat_stream(
     body: ChatIn,
     conn: psycopg.Connection = Depends(get_db),
     embedder: Embedder = Depends(get_embedder),
+    settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """Answer a question in a conversation, streaming text deltas as server-sent events."""
     if not collection_exists(conn, collection_id):
         raise HTTPException(status_code=404, detail="Unknown collection.")
-    settings = get_settings()
     workspace_id = collection_workspace(conn, collection_id)
     events: Iterator[str] = chat_events(
         conn, embedder, collection_id, workspace_id, body, settings
@@ -155,12 +169,14 @@ def chat_stream(
 
 @router.get("/collections/{collection_id}/conversations", response_model=list[ConversationOut])
 def list_collection_conversations(
-    collection_id: UUID, conn: psycopg.Connection = Depends(get_db)
+    collection_id: UUID,
+    conn: psycopg.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> list[dict]:
     """List the dev user's conversations in the collection, newest first."""
     if not collection_exists(conn, collection_id):
         raise HTTPException(status_code=404, detail="Unknown collection.")
-    return list_conversations(conn, collection_id, get_settings().dev_user_id)
+    return list_conversations(conn, collection_id, settings.dev_user_id)
 
 
 @router.get(
@@ -168,10 +184,13 @@ def list_collection_conversations(
     response_model=ConversationDetail,
 )
 def get_collection_conversation(
-    collection_id: UUID, conversation_id: UUID, conn: psycopg.Connection = Depends(get_db)
+    collection_id: UUID,
+    conversation_id: UUID,
+    conn: psycopg.Connection = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     """Return one conversation with its messages and their citations."""
-    title = conversation_title(conn, conversation_id, collection_id, get_settings().dev_user_id)
+    title = conversation_title(conn, conversation_id, collection_id, settings.dev_user_id)
     if title is None:
         raise HTTPException(status_code=404, detail="Unknown conversation.")
     messages = [

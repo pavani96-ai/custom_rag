@@ -8,9 +8,9 @@ import pytest
 from opensearchpy import NotFoundError
 from pypdf import PdfWriter
 
+from app.config.settings import get_settings
 from app.rag import indexing
-from app.search.opensearch import INDEX_NAME
-from app.storage import LocalStorage
+from app.rag.document_storage import LocalStorage
 
 WORKSPACE = "00000000-0000-4000-8000-000000000002"
 
@@ -63,7 +63,12 @@ def run(storage, embedder, search, status="queued"):  # type: ignore[no-untyped-
         storage_key="collections/col-1/originals/abc.pdf",
     )
     return indexing.index_document(
-        conn=conn, storage=storage, embedder=embedder, search=search, job=job
+        conn=conn,
+        storage=storage,
+        embedder=embedder,
+        search=search,
+        job=job,
+        settings=get_settings(),
     )
 
 
@@ -98,7 +103,7 @@ def test_ready_document_reuses_existing_chunks(tmp_path: Path, recorded: dict[st
     search.count.return_value = {"count": 3, "_shards": {"failed": 0}}
     assert run(LocalStorage(tmp_path), embedder, search, status="ready") == 3
     search.count.assert_called_once_with(
-        index=INDEX_NAME,
+        index=get_settings().opensearch_index_name,
         body={"query": {"term": {"metadata.source_document_id.keyword": "doc-1"}}},
     )
 

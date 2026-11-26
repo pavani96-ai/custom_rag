@@ -1,1 +1,1 @@
-"""Ingestion package: Celery tasks, nodes, and indexing."""
+"""Ingestion package: extraction, chunking, indexing, and retrieval."""

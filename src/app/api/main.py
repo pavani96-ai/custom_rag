@@ -14,10 +14,8 @@ from app.api.routes import router
 from app.config.settings import get_settings
 from app.observability import configure_logging
 
-MAX_REQUEST_ID_LENGTH = 64
-SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]+$")
-
-configure_logging(get_settings().log_level)
+settings = get_settings()
+configure_logging(settings.log_level)
 logger = structlog.stdlib.get_logger(__name__)
 
 
@@ -29,7 +27,7 @@ def parse_origins(raw: str) -> list[str]:
 app = FastAPI(title="Document workspace API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=parse_origins(get_settings().web_origins),
+    allow_origins=parse_origins(settings.web_origins),
     allow_methods=["GET", "POST"],
     allow_headers=["content-type", "x-request-id"],
     expose_headers=["x-request-id"],
@@ -46,7 +44,9 @@ def resolve_request_id(header_value: str | None) -> str:
 
 def _is_safe_request_id(value: str) -> bool:
     """Return True when the ID is short enough and contains only safe characters."""
-    return len(value) <= MAX_REQUEST_ID_LENGTH and SAFE_REQUEST_ID.fullmatch(value) is not None
+    return len(value) <= settings.request_id_max_length and re.fullmatch(
+        settings.request_id_pattern, value
+    ) is not None
 
 
 @app.middleware("http")

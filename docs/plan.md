@@ -12,10 +12,11 @@ Build a private workspace that ingests documents, answers with verifiable citati
 | `src/app/config/` | Settings loaded from environment variables and `.env` (`settings.py`) |
 | `src/app/workers/` | Celery worker app (`celery_app.py`) |
 | `src/app/db/` | PostgreSQL migration runner (`migrate.py`) |
-| `src/app/storage/` | Original-file storage adapters (local folder now, cloud later) |
-| `src/app/rag/` | Extraction and chunking (`pipeline.py`), indexing, and Celery tasks (`tasks.py`) |
-| `src/app/search/` | OpenSearch index mapping and bulk indexing (`opensearch.py`) |
-| `src/app/rag/providers/` | Jina embeddings and reranking clients |
+| `src/app/rag/document_storage.py` | Original-file storage adapters (local folder now, cloud later) |
+| `src/app/rag/` | Extraction and chunking (`pipeline.py`), indexing |
+| `src/app/workers/tasks.py` | Celery tasks: heartbeat and the per-document indexing job |
+| `src/app/rag/vectorstore.py` | OpenSearch chunk index: LlamaIndex vector store on the native client |
+| `src/app/rag/embedder.py` | Jina embedding client (reranking uses LlamaIndex's Jina package in `retrieval.py`) |
 | `src/app/observability/` | Structured JSON logging |
 | `src/app/db/migrations/` | PostgreSQL schema and migrations (run by `db/migrate.py`) |
 | `src/tests/` | Unit and integration fixtures, including synthetic PDFs and spreadsheets |
@@ -53,6 +54,8 @@ Build a private workspace that ingests documents, answers with verifiable citati
 - [ ] Compare the baseline with question-enriched chunks on the frozen milestone 1 cases, using identical retrieval settings. Add independently labeled scan cases before tuning OCR. Adopt one enrichment only if the held-out benchmark shows a gain worth its cost. Consider parent expansion when missed answers require more section context.
 - [ ] Add Graph RAG on by default. Extract entities and relationships at ingest into a graph store, and build document and collection summaries from them. Run keyword, vector, and graph retrieval in parallel for every question, merge with reciprocal rank fusion, and rerank. Do not add a query classifier. Cache extraction and summary calls by enrichment identity, and remove graph entities and summaries when a document is deleted. Compare this fan-out against the hybrid-only baseline on the frozen cases, recording latency and cost per query.
 - [ ] Add a bounded vision path for retrieved charts or ambiguous handwriting. Trial ColPali only if visual pages frequently miss candidate retrieval.
+- [ ] Set a latency budget for `/ask` and chat, with first token under 2 seconds. Log timings for query embedding, vector and keyword search, rerank, prompt build, first token, and generation, under one request ID. Run the vector and keyword branches in parallel. Cap output tokens. Cache query embeddings. Route simple questions to a smaller model only if the frozen cases hold. Stream `/ask` as chat already does. Test a semantic cache for repeat questions only after the stage timings show it helps.
+
 - [ ] **Acceptance** — Answer a question requiring a digital and scanned PDF. Test a mixed PDF, a broken text layer, and handwritten entries on a printed form. Verify citations, names and numbers, and abstention for unreadable details. Report dense, hybrid, and reranked evidence recall separately. Ask a summary question across both documents and verify the graph branch contributes evidence to the answer. Ask a specific fact question and verify that candidate IDs from each branch are recorded before and after reranking.
 - [ ] **Cache check** — Ingest a new scanned fixture using a profile with question enrichment enabled. Assert that the first run invokes OCR, enrichment, and embedding. Restart the API and workers, reingest with the identical profile, and assert zero additional calls to each stage with the expected citations still retrievable.
 

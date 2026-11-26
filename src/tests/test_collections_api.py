@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.api import routes as routes
 from app.api.main import app
-from app.storage import LocalStorage, StorageError
+from app.exception_handling.exceptions import StorageError
+from app.rag.document_storage import LocalStorage
 
 PDF_BYTES = b"%PDF-1.4\n% test document\n"
 

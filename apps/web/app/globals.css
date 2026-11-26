@@ -195,5 +195,6 @@ main.chat-layout.with-source {
   padding-left: 1.25rem;
 }
 .answer p {
-  margin: 0.25rem 0;
+  margin: 0.75rem 0;
+  line-height: 1.6;
 }

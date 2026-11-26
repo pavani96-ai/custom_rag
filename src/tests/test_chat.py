@@ -23,9 +23,9 @@ from app.rag.chat import (
     cited_ids,
     sse_frame,
 )
-from app.rag.prompts import with_style
+from app.rag.document_storage import LocalStorage
+from app.rag.prompts import STREAM_INSTRUCTION, SYSTEM_INSTRUCTION, with_style
 from app.schema.models import CitedPassage, CollectionIn, Passage
-from app.storage import LocalStorage
 
 
 def passage(source_id: int, text: str) -> CitedPassage:
@@ -342,3 +342,12 @@ def test_unknown_job_is_404(client: TestClient, monkeypatch) -> None:  # type: i
     monkeypatch.setattr(routes, "job_status", lambda conn, cid, jid: None)
     response = client.get(f"/collections/{uuid4()}/jobs/{uuid4()}")
     assert response.status_code == 404
+
+
+def test_answer_instructions_ask_for_plain_text() -> None:
+    """Both answer instructions forbid markdown and LaTeX, since the chat shows plain text."""
+    for instruction in (STREAM_INSTRUCTION, SYSTEM_INSTRUCTION):
+        assert "plain text only" in instruction
+        assert "asterisks" in instruction
+        assert "LaTeX" in instruction
+        assert "Never drop a formula" in instruction

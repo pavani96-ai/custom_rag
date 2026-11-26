@@ -9,9 +9,9 @@ Follow `.claude/rules/code style.md`, `security.md`, and `testing.md`. Then appl
    - HTTP handlers: `src/app/api/routes.py` only.
    - Pydantic request, response, and provider models: `src/app/schema/models.py` only.
    - Settings: `src/app/config/settings.py`. Read config only through it.
-   - Ingest and chunking: `src/app/rag/`. Provider clients: `src/app/rag/providers/`.
+   - Ingest, chunking, and Jina clients: `src/app/rag/` (`embedder.py`, `llm.py`).
    - Database access: `src/app/db/`. SQL is parameterized and read-only where possible.
-   - Search index code: `src/app/search/`. Storage: `src/app/storage/`. Logging: `src/app/observability/`.
+   - Chunk index: `src/app/rag/vectorstore.py`. Original-file storage: `src/app/rag/document_storage.py`. Exceptions: `src/app/exception_handling/`. Logging: `src/app/observability/`.
    - Web UI: `apps/web/app/` for pages, `apps/web/lib/` for shared logic.
    If no folder fits, say so and propose one before creating it.
 

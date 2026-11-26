@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from app.config.settings import Settings
-from app.storage import CloudStorage, LocalStorage, StorageError, build_storage
+from app.exception_handling.exceptions import StorageError
+from app.rag.document_storage import CloudStorage, LocalStorage, build_storage
 
 
 def test_local_storage_writes_bytes_under_key(tmp_path: Path) -> None:

@@ -5,13 +5,24 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
-import httpx
+import requests
 
 from app.api import answer_pipeline
 from app.api import routes as answers
 from app.api.routes import Passage, SearchIn
 from app.config.settings import Settings
 from app.schema.models import GeneratedAnswer
+
+
+class FakeResponse:
+    """Stands in for a requests response with a JSON body."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def json(self) -> dict:
+        """Return the canned JSON payload."""
+        return self._payload
 
 
 def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
@@ -28,26 +39,23 @@ def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
         update={"chunk_id": uuid4(), "text": "An unrelated passage.", "score": 1.0}
     )
 
-    def search(_collection, body, _conn, _embedder):
+    def search(_collection, body, _conn, _embedder, _settings):
         assert body.top_k == 20
         return [other, passage, duplicate]
 
-    def rerank(url, *, headers, json, timeout):
-        assert url == "https://api.jina.ai/v1/rerank"
-        assert headers["Authorization"] == "Bearer test"
+    def rerank(session, url, *, json, **kwargs):  # type: ignore[no-untyped-def]
+        assert url.endswith("/rerank")
+        assert session.headers["Authorization"] == "Bearer test"
         assert json["documents"] == [other.text, passage.text]
-        assert json["top_n"] == 2
-        return httpx.Response(
-            200,
-            request=httpx.Request("POST", url),
-            json={"results": [
-                {"index": 1, "relevance_score": 0.98},
-                {"index": 0, "relevance_score": 0.1},
-            ]},
-        )
+        assert json["model"] == "jina-reranker-v3.5"
+        assert json["top_n"] == 5
+        return FakeResponse({"results": [
+            {"index": 1, "relevance_score": 0.98},
+            {"index": 0, "relevance_score": 0.1},
+        ]})
 
     monkeypatch.setattr(answers, "search_collection", search)
-    monkeypatch.setattr(httpx, "post", rerank)
+    monkeypatch.setattr(requests.Session, "post", rerank)
     client = Mock()
     client.chat.return_value = SimpleNamespace(
         message=SimpleNamespace(
@@ -60,11 +68,11 @@ def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
     monkeypatch.setattr(
         answer_pipeline, "collection_prompt_settings", lambda conn, cid: {"format": "bullets"}
     )
-    monkeypatch.setattr(answers, "get_settings", lambda: Settings(jina_api_key="test"))
 
     result = answers.ask_collection(
         uuid4(), SearchIn(query="Are internal memos sensitive?"), Mock(), Mock(),
         include_contexts=True,
+        settings=Settings(jina_api_key="test"),
     )
 
     assert result.answer == "Internal memos are generally sensitive [1]."
@@ -85,7 +93,9 @@ def test_empty_retrieval_skips_gemini(monkeypatch) -> None:
     client_factory = Mock()
     monkeypatch.setattr(answer_pipeline, "build_llm", client_factory)
 
-    result = answers.ask_collection(uuid4(), SearchIn(query="question"), Mock(), Mock())
+    result = answers.ask_collection(
+        uuid4(), SearchIn(query="question"), Mock(), Mock(), settings=Settings()
+    )
 
     assert result.sources == []
     assert "enough evidence" in result.answer

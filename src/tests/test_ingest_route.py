@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from app.api import routes as routes
 from app.api.main import app
 from app.api.routes import get_db, get_storage
-from app.storage import LocalStorage
+from app.config.settings import get_settings
+from app.rag.document_storage import LocalStorage
 from app.workers import ingest
 
 SHA = "a" * 64
@@ -77,3 +78,20 @@ def test_ingest_rejects_bad_upload_id(client: TestClient) -> None:
         json={"documents": [{"upload_id": "../etc", "filename": "x.pdf"}]},
     )
     assert response.status_code == 422
+
+
+def test_ingest_rejects_batch_over_configured_limit(
+    client: TestClient, queued, monkeypatch: pytest.MonkeyPatch
+) -> None:  # type: ignore[no-untyped-def]
+    """A batch larger than MAX_BATCH_FILES gets a 422 and nothing is queued."""
+    monkeypatch.setenv("MAX_BATCH_FILES", "1")
+    get_settings.cache_clear()
+    try:
+        documents = [{"upload_id": SHA, "filename": "a.pdf"}] * 2
+        response = client.post(
+            f"/collections/{uuid4()}/documents/ingest", json={"documents": documents}
+        )
+    finally:
+        get_settings.cache_clear()
+    assert response.status_code == 422
+    assert queued == []

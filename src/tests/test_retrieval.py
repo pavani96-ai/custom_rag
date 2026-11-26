@@ -10,7 +10,7 @@ from llama_index.core.vector_stores.utils import node_to_metadata_dict
 from app.api import answer_pipeline
 from app.api import routes as retrieval
 from app.api.main import app
-from app.search.opensearch import INDEX_NAME
+from app.config.settings import get_settings
 
 
 def wrapper_hit(chunk_id: str, text: str, document_id: str, score: float) -> dict:
@@ -47,7 +47,7 @@ def test_search_returns_ranked_passages(monkeypatch) -> None:
     seen: list[str] = []
 
     def search(*, index, body, **kwargs):  # type: ignore[no-untyped-def]
-        assert index == INDEX_NAME
+        assert index == get_settings().opensearch_index_name
         query = json.dumps(body["query"])
         assert "metadata.collection_id" in query and collection_id in query
         if "knn" in query:
@@ -63,7 +63,11 @@ def test_search_returns_ranked_passages(monkeypatch) -> None:
     assert "post" in app.openapi()["paths"]["/collections/{collection_id}/search"]
 
     response = retrieval.search_collection(
-        UUID(collection_id), retrieval.SearchIn(query=" A question? ", top_k=3), Mock(), embedder
+        UUID(collection_id),
+        retrieval.SearchIn(query=" A question? ", top_k=3),
+        Mock(),
+        embedder,
+        get_settings(),
     )
 
     assert sorted(seen) == ["keyword", "vector"]
@@ -80,7 +84,7 @@ def test_empty_collection_skips_embedding(monkeypatch) -> None:
     monkeypatch.setattr(retrieval, "collection_exists", lambda conn, cid: True)
     monkeypatch.setattr(answer_pipeline, "ready_document_ids", lambda conn, cid: [])
     response = retrieval.search_collection(
-        uuid4(), retrieval.SearchIn(query="question"), Mock(), embedder
+        uuid4(), retrieval.SearchIn(query="question"), Mock(), embedder, get_settings()
     )
     assert response == []
     embedder.embed.assert_not_called()

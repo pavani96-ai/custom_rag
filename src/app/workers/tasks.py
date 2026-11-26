@@ -8,9 +8,9 @@ import structlog
 from opensearchpy import OpenSearch
 
 from app.config.settings import Settings, get_settings
+from app.rag.document_storage import build_storage
+from app.rag.embedder import JinaEmbedder
 from app.rag.indexing import IndexJob, index_document
-from app.rag.providers.embedder import JinaEmbedder
-from app.storage import build_storage
 from app.workers.celery_app import celery_app
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -40,9 +40,10 @@ def index_document_task(
         return index_document(
             conn=conn,
             storage=build_storage(settings),
-            embedder=JinaEmbedder(settings.jina_api_key, "retrieval.passage"),
+            embedder=JinaEmbedder(settings, "retrieval.passage"),
             search=search,
             job=job,
+            settings=settings,
         )
 
 
