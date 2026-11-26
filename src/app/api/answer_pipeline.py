@@ -305,9 +305,20 @@ def _finish_turn(
     yield sse_frame("done", {"message_id": message_id, "answer": answer, "citations": citations})
 
 
-def _history(conn: psycopg.Connection, body: ChatIn, conversation_id: UUID) -> list[dict]:
-    """Return earlier turns for an existing conversation. A new conversation has none."""
-    return [] if body.conversation_id is None else load_history(conn, conversation_id)
+def _open_turn(
+    conn: psycopg.Connection,
+    body: ChatIn,
+    collection_id: UUID,
+    workspace_id: str,
+    settings: Settings,
+) -> tuple[UUID, list[dict]]:
+    """Return the turn's conversation ID and its earlier messages. A new conversation has none."""
+    conversation_id = resolve_conversation(
+        conn, body, collection_id, workspace_id, settings.dev_user_id
+    )
+    if body.conversation_id is None:
+        return conversation_id, []
+    return conversation_id, load_history(conn, conversation_id)
 
 
 def chat_events(
@@ -319,9 +330,7 @@ def chat_events(
     settings: Settings,
 ) -> Iterator[str]:
     """Prepare one chat turn (conversation, history, retrieval, model) and return its events."""
-    conversation_id = resolve_conversation(
-        conn, body, collection_id, workspace_id, settings.dev_user_id
-    )
+    conversation_id, history = _open_turn(conn, body, collection_id, workspace_id, settings)
     sources = retrieve_for_question(conn, embedder, collection_id, body.query, settings)
     return turn_events(
         llm=build_llm(settings) if sources else None,
@@ -329,7 +338,7 @@ def chat_events(
         settings=settings,
         conversation_id=conversation_id,
         question=body.query,
-        contents=build_contents(body.query, _history(conn, body, conversation_id), sources),
+        contents=build_contents(body.query, history, sources),
         sources=sources,
     )
 
