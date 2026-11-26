@@ -1,10 +1,12 @@
 """Embedding model adapter for the hosted Jina API."""
 
+from functools import lru_cache
 from typing import Literal, Protocol
 
 import httpx
 from pydantic import SecretStr, ValidationError
 
+from app.config.settings import get_settings
 from app.schema.models import EmbeddingResponse
 
 JINA_EMBEDDINGS_URL = "https://api.jina.ai/v1/embeddings"
@@ -91,3 +93,9 @@ class JinaEmbedder:
         ):
             raise EmbeddingError("Jina returned an unexpected number or size of embeddings.")
         return [item.embedding for item in items]
+
+
+@lru_cache(maxsize=1)
+def get_embedder() -> Embedder:
+    """Return the query embedder, created once per process. Used as a FastAPI dependency."""
+    return JinaEmbedder(get_settings().jina_api_key, "retrieval.query")

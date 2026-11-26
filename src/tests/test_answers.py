@@ -7,9 +7,11 @@ from uuid import uuid4
 
 import httpx
 
+from app.api import answer_pipeline
 from app.api import routes as answers
 from app.api.routes import Passage, SearchIn
 from app.config.settings import Settings
+from app.schema.models import GeneratedAnswer
 
 
 def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
@@ -54,9 +56,9 @@ def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
             )
         )
     )
-    monkeypatch.setattr(answers, "build_llm", lambda settings: client)
+    monkeypatch.setattr(answer_pipeline, "build_llm", lambda settings: client)
     monkeypatch.setattr(
-        answers, "collection_prompt_settings", lambda conn, cid: {"format": "bullets"}
+        answer_pipeline, "collection_prompt_settings", lambda conn, cid: {"format": "bullets"}
     )
     monkeypatch.setattr(answers, "get_settings", lambda: Settings(jina_api_key="test"))
 
@@ -74,14 +76,14 @@ def test_answer_resolves_citation_to_passage(monkeypatch) -> None:
     assert json.loads(messages[1].content)["passages"][0]["text"] == passage.text
     assert "bulleted list" in messages[0].content
     assert client.chat.call_args.kwargs["generation_config"]["response_schema"] is (
-        answers.GeneratedAnswer
+        GeneratedAnswer
     )
 
 
 def test_empty_retrieval_skips_gemini(monkeypatch) -> None:
     monkeypatch.setattr(answers, "search_collection", lambda *args: [])
     client_factory = Mock()
-    monkeypatch.setattr(answers, "build_llm", client_factory)
+    monkeypatch.setattr(answer_pipeline, "build_llm", client_factory)
 
     result = answers.ask_collection(uuid4(), SearchIn(query="question"), Mock(), Mock())
 

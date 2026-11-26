@@ -13,6 +13,21 @@ class StorageError(Exception):
     """Raised when an original cannot be written to storage."""
 
 
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+PDF_MAGIC = b"%PDF"
+
+
+def validate_upload(filename: str, data: bytes) -> str | None:
+    """Return an error message for a file that must not be stored, or None if it is valid."""
+    if not filename.lower().endswith(".pdf"):
+        return "Only PDF files are accepted in this milestone."
+    if len(data) > MAX_UPLOAD_BYTES:
+        return "File is larger than the 50 MB limit."
+    if not data.startswith(PDF_MAGIC):
+        return "File content is not a PDF."
+    return None
+
+
 class OriginalNotStoredError(Exception):
     """The original for an upload ID is not in storage, so it cannot be indexed."""
 

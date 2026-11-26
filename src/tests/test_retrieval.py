@@ -3,6 +3,7 @@
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
+from app.api import answer_pipeline
 from app.api import routes as retrieval
 from app.api.main import app
 from app.search.opensearch import INDEX_NAME
@@ -21,7 +22,7 @@ def test_search_returns_ranked_passages(monkeypatch) -> None:
     embedder = Mock()
     embedder.embed.return_value = [[0.5, 0.5]]
     monkeypatch.setattr(retrieval, "collection_exists", lambda conn, cid: True)
-    monkeypatch.setattr(retrieval, "ready_document_ids", lambda conn, cid: [document_id])
+    monkeypatch.setattr(answer_pipeline, "ready_document_ids", lambda conn, cid: [document_id])
 
     client = Mock()
     filters = [
@@ -46,7 +47,7 @@ def test_search_returns_ranked_passages(monkeypatch) -> None:
         return {"timed_out": False, "hits": {"hits": [{"_source": hit, "_score": 1.5}]}}
 
     client.search.side_effect = search
-    monkeypatch.setattr(retrieval, "OpenSearch", lambda *args, **kwargs: client)
+    monkeypatch.setattr(answer_pipeline, "OpenSearch", lambda *args, **kwargs: client)
     assert "post" in app.openapi()["paths"]["/collections/{collection_id}/search"]
     conn = Mock()
     response = retrieval.search_collection(
@@ -64,7 +65,7 @@ def test_search_returns_ranked_passages(monkeypatch) -> None:
 def test_empty_collection_skips_embedding(monkeypatch) -> None:
     embedder = Mock()
     monkeypatch.setattr(retrieval, "collection_exists", lambda conn, cid: True)
-    monkeypatch.setattr(retrieval, "ready_document_ids", lambda conn, cid: [])
+    monkeypatch.setattr(answer_pipeline, "ready_document_ids", lambda conn, cid: [])
     response = retrieval.search_collection(
         uuid4(), retrieval.SearchIn(query="question"), Mock(), embedder
     )

@@ -1,3 +1,4 @@
+
 """Tests for chat turns: citation checks, streamed events, saved turns, and the chat routes.
 
 Gemini, the database, and storage are replaced by fakes. No test calls a real service.
@@ -11,9 +12,10 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from google.auth.exceptions import GoogleAuthError
 from pydantic import ValidationError
 
-from app.api import routes
+from app.api import answer_pipeline, routes
 from app.api.main import app
 from app.rag.chat import (
     build_contents,
@@ -118,10 +120,10 @@ def test_turn_streams_deltas_then_saves_cited_turn(monkeypatch) -> None:  # type
         saved.update(question=question, answer=answer, citations=citations)
         return "message-id"
 
-    monkeypatch.setattr(routes, "persist_turn", fake_persist)
+    monkeypatch.setattr(answer_pipeline, "persist_turn", fake_persist)
     conversation_id = uuid4()
     body = "".join(
-        routes.turn_events(
+        answer_pipeline.turn_events(
             llm=client,
             settings=Mock(),
             conversation_id=conversation_id,
@@ -147,9 +149,9 @@ def test_turn_with_invalid_citation_reports_error_and_saves_nothing(monkeypatch)
     client = Mock()
     client.stream_chat.return_value = chunks("Wrong source [5].")
     persist = Mock()
-    monkeypatch.setattr(routes, "persist_turn", persist)
+    monkeypatch.setattr(answer_pipeline, "persist_turn", persist)
     body = "".join(
-        routes.turn_events(
+        answer_pipeline.turn_events(
             llm=client,
             settings=Mock(),
             conversation_id=uuid4(),
@@ -166,9 +168,9 @@ def test_turn_with_invalid_citation_reports_error_and_saves_nothing(monkeypatch)
 def test_turn_without_passages_abstains_without_calling_gemini(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """No retrieved passages means no model call, an abstention answer, and a saved turn."""
     persist = Mock(return_value="message-id")
-    monkeypatch.setattr(routes, "persist_turn", persist)
+    monkeypatch.setattr(answer_pipeline, "persist_turn", persist)
     body = "".join(
-        routes.turn_events(
+        answer_pipeline.turn_events(
             llm=None,
             settings=Mock(),
             conversation_id=uuid4(),
@@ -188,11 +190,11 @@ def test_turn_without_passages_abstains_without_calling_gemini(monkeypatch) -> N
 def test_gemini_failure_reports_error_without_saving(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """A provider error becomes an error event, and the turn is not saved."""
     client = Mock()
-    client.stream_chat.side_effect = routes.GoogleAuthError("no credentials")
+    client.stream_chat.side_effect = GoogleAuthError("no credentials")
     persist = Mock()
-    monkeypatch.setattr(routes, "persist_turn", persist)
+    monkeypatch.setattr(answer_pipeline, "persist_turn", persist)
     body = "".join(
-        routes.turn_events(
+        answer_pipeline.turn_events(
             llm=client,
             settings=Mock(),
             conversation_id=uuid4(),
@@ -202,7 +204,7 @@ def test_gemini_failure_reports_error_without_saving(monkeypatch) -> None:  # ty
             sources=[passage(1, "text")],
         )
     )
-    assert parse_events(body)[-1] == ("error", {"detail": routes.GENERATION_UNAVAILABLE})
+    assert parse_events(body)[-1] == ("error", {"detail": answer_pipeline.GENERATION_UNAVAILABLE})
     persist.assert_not_called()
 
 
@@ -234,11 +236,11 @@ def test_chat_stream_creates_conversation_for_first_turn(client: TestClient, mon
     created = {}
     monkeypatch.setattr(routes, "collection_workspace", lambda conn, cid: str(uuid4()))
     monkeypatch.setattr(
-        routes, "create_conversation", lambda conn, **kw: created.update(kw)
+        answer_pipeline, "create_conversation", lambda conn, **kw: created.update(kw)
     )
-    monkeypatch.setattr(routes, "retrieve_for_question", lambda *args: [])
-    monkeypatch.setattr(routes, "collection_prompt_settings", lambda conn, cid: {})
-    monkeypatch.setattr(routes, "persist_turn", lambda *args: "message-id")
+    monkeypatch.setattr(answer_pipeline, "retrieve_for_question", lambda *args: [])
+    monkeypatch.setattr(answer_pipeline, "collection_prompt_settings", lambda conn, cid: {})
+    monkeypatch.setattr(answer_pipeline, "persist_turn", lambda *args: "message-id")
     response = client.post(
         f"/collections/{uuid4()}/chat/stream", json={"query": "What is deep learning?"}
     )
@@ -256,7 +258,7 @@ def test_chat_stream_rejects_other_collection_conversation(
 ) -> None:  # type: ignore[no-untyped-def]
     """A follow-up naming a conversation that is not in this collection gets 404."""
     monkeypatch.setattr(routes, "collection_workspace", lambda conn, cid: str(uuid4()))
-    monkeypatch.setattr(routes, "conversation_title", lambda *args: None)
+    monkeypatch.setattr(answer_pipeline, "conversation_title", lambda *args: None)
     response = client.post(
         f"/collections/{uuid4()}/chat/stream",
         json={"query": "follow up", "conversation_id": str(uuid4())},

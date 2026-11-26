@@ -4,6 +4,7 @@ Read at the start of every session. Each date has 4 to 5 short lines. Move old e
 
 ## 2026-11-26
 
+- Route helpers moved out of `routes.py`: answer and chat steps to `src/app/api/answer_pipeline.py`, upload steps to `src/app/api/upload_pipeline.py`. Upload validation (`validate_upload`, `MAX_UPLOAD_BYTES`) moved to `src/app/storage/` (no `utils/` folder in the layout). `get_embedder` moved to `rag/providers/embedder.py`. Routes now only check requests and call pipelines. `make check`: 84 passed.
 - Prompt text (`SYSTEM_INSTRUCTION`, `STREAM_INSTRUCTION`, `INSUFFICIENT_EVIDENCE`) and the style rules (`with_style`) moved to `src/app/rag/prompts.py`.
 - Ingest queueing moved out of routes: `queue_document` in `workers/ingest.py` checks the stored original, records the job (`db/jobs.py`), and sends it to Celery. Routes only map a missing original to 409. Storage keys come from `original_key` in `storage/`.
 - Collection queries (`insert_collection`, `collection_exists`, `collection_workspace`, `ready_document_ids`) moved to `src/app/db/collections.py`; `store_one` became `store_original` in `src/app/storage/`. Routes only wire them up.
