@@ -1,0 +1,215 @@
+{
+  "cases_version": "milestone1-v1",
+  "retrieval": "current collection search (vector + BM25 fusion)",
+  "collection_id": "58ae7cff-76d2-48d5-8e1a-5fde7a4f3196",
+  "summary": {
+    "hits": 4,
+    "scored": 5,
+    "top_k": 5
+  },
+  "results": [
+    {
+      "id": "m1-exact-001",
+      "type": "exact_identifier",
+      "top_results": [
+        [
+          "Transformer_Theory_Notes.pdf",
+          2,
+          1.0
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          45,
+          0.4189
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          46,
+          0.0744
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          45,
+          0.0286
+        ],
+        [
+          "Data Taxonomy & Annotation Guide (1).pdf",
+          2,
+          0.0032
+        ]
+      ],
+      "hit": true,
+      "missing_expected": []
+    },
+    {
+      "id": "m1-exact-002",
+      "type": "exact_identifier",
+      "top_results": [
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          1.0
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          0.5638
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          1,
+          0.3277
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          0.2705
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          36,
+          0.0129
+        ]
+      ],
+      "hit": true,
+      "missing_expected": []
+    },
+    {
+      "id": "m1-fact-003",
+      "type": "fact",
+      "top_results": [
+        [
+          "Transformer_Theory_Notes.pdf",
+          3,
+          1.0
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          5,
+          0.2474
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          26,
+          0.0934
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          17,
+          0.0686
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          38,
+          0.0562
+        ]
+      ],
+      "hit": true,
+      "missing_expected": []
+    },
+    {
+      "id": "m1-fact-004",
+      "type": "fact",
+      "top_results": [
+        [
+          "Transformer_Theory_Notes.pdf",
+          3,
+          1.0
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          6,
+          0.1811
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          3,
+          0.1392
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          0.0095
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          12,
+          0.0031
+        ]
+      ],
+      "hit": true,
+      "missing_expected": []
+    },
+    {
+      "id": "m1-span-005",
+      "type": "cross_document",
+      "top_results": [
+        [
+          "Transformer_Theory_Notes.pdf",
+          1,
+          0.6
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          0.4
+        ],
+        [
+          "Data Taxonomy & Annotation Guide (1).pdf",
+          2,
+          0.325
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          0.3025
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          45,
+          0.086
+        ]
+      ],
+      "hit": false,
+      "missing_expected": [
+        [
+          "Data Taxonomy & Annotation Guide (1).pdf",
+          1
+        ]
+      ]
+    },
+    {
+      "id": "m1-abstain-006",
+      "type": "unanswerable",
+      "top_results": [
+        [
+          "Transformer_Theory_Notes.pdf",
+          24,
+          0.6
+        ],
+        [
+          "Data Taxonomy & Annotation Guide (1).pdf",
+          1,
+          0.4
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          29,
+          0.3719
+        ],
+        [
+          "Transformer_Theory_Notes.pdf",
+          21,
+          0.3628
+        ],
+        [
+          "Data Taxonomy & Annotation Guide (1).pdf",
+          3,
+          0.3284
+        ]
+      ],
+      "hit": null,
+      "note": "no expected pages; abstention is checked in chat"
+    }
+  ]
+}

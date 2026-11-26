@@ -26,7 +26,7 @@ At the end of each session, add a dated entry to CHANGELOG.md. Move entries that
 - `src/app/search/`: OpenSearch index mapping and bulk indexing (`opensearch.py`)
 - `src/app/config/`: settings from environment and `.env`; `src/app/workers/`: Celery app
 - `src/app/schema/models.py`: every Pydantic request, response, and provider payload model
-- `src/app/db/`: migration runner and SQL migrations (`db/migrations/`); `src/app/storage/`: original-file storage; `src/app/observability/`: JSON logs
+- `src/app/db/`: migration runner, SQL migrations (`db/migrations/`), and conversation queries (`conversations.py`); `src/app/storage/`: original-file storage; `src/app/observability/`: JSON logs
 - `src/tests/`, `ops/api.Dockerfile`: API image (build context is `src/`)
 - `evals/`, `ops/`, `infra/terraform/`
 

@@ -1,0 +1,66 @@
+{
+  "version": "milestone1-v1",
+  "status": "frozen 2026-11-26: pages checked with pdftotext (PDF page numbers, not the notes' internal labels) and citations checked in the chat UI; do not edit without a new version",
+  "documents": [
+    {"key": "transformer_notes", "file": "docs/demo-docs/Transformer_Theory_Notes.pdf"},
+    {"key": "taxonomy_guide", "file": "docs/demo-docs/Data Taxonomy & Annotation Guide (1).pdf"}
+  ],
+  "cases": [
+    {
+      "id": "m1-exact-001",
+      "type": "exact_identifier",
+      "question": "On which page is the section \"Cheat sheet & interview answers\" located?",
+      "reference_answer": "Page 22 as labelled in the notes, which is PDF page 45. PDF page 2 (table of contents) also names the section.",
+      "expected_documents": ["transformer_notes"],
+      "expected_pages": [45],
+      "acceptable_pages": [2],
+      "page_status": "verified"
+    },
+    {
+      "id": "m1-exact-002",
+      "type": "exact_identifier",
+      "question": "What analogy explains Key, Query, and Value, and on which page is it?",
+      "reference_answer": "The database analogy, labelled page 10 in the notes, which is PDF page 21. PDF page 1 (table of contents) also names it.",
+      "expected_documents": ["transformer_notes"],
+      "expected_pages": [21],
+      "acceptable_pages": [1],
+      "page_status": "verified"
+    },
+    {
+      "id": "m1-fact-003",
+      "type": "fact",
+      "question": "Why is \"vectorization\" the proper term rather than \"embedding\"?",
+      "reference_answer": "An embedding model is only one way of turning words into numbers; other methods, such as a random number generator, also work.",
+      "expected_documents": ["transformer_notes"],
+      "expected_pages": [3],
+      "page_status": "verified"
+    },
+    {
+      "id": "m1-fact-004",
+      "type": "fact",
+      "question": "Which upgraded version of TF-IDF is still used in search and hybrid RAG retrieval?",
+      "reference_answer": "BM25.",
+      "expected_documents": ["transformer_notes"],
+      "expected_pages": [3],
+      "page_status": "verified"
+    },
+    {
+      "id": "m1-span-005",
+      "type": "cross_document",
+      "question": "Using both documents, how does the Transformer notes explain Key, Query, and Value, and what does the annotation guide say makes a prompt sensitive?",
+      "reference_answer": "Key, Query, and Value are explained by the database analogy (transformer notes, PDF page 1). The guide says a prompt is sensitive when it reveals something private, internal, or confidential about a company or person, not merely when it mentions one (taxonomy guide, PDF page 1).",
+      "expected_documents": ["transformer_notes", "taxonomy_guide"],
+      "expected_pages": {"transformer_notes": [21], "taxonomy_guide": [1]},
+      "page_status": "verified"
+    },
+    {
+      "id": "m1-abstain-006",
+      "type": "unanswerable",
+      "question": "What was the total revenue of the company in the fourth quarter of 2031?",
+      "reference_answer": "Abstain: neither document contains this information.",
+      "expected_documents": [],
+      "expected_pages": [],
+      "page_status": "n/a"
+    }
+  ]
+}

@@ -11,7 +11,7 @@ A workspace contains private document collections. The UI may call a saved colle
 | Next.js | Collection setup, direct upload, file and job status, chat streaming, source viewer, and charts |
 | FastAPI | Authentication, authorization, upload and job APIs, retrieval, analysis, and streaming |
 | Celery | Extraction, OCR, enrichment, embedding, reingestion, and cleanup |
-| LlamaIndex | Linked nodes, retrieval orchestration, reranking, and context assembly |
+| LlamaIndex | Orchestration framework: linked nodes, retrieval, reranking calls, context assembly, and answer generation (Gemini via `GoogleGenAI`). Provider clients such as Jina and OpenSearch stay native so their settings can be changed directly. |
 | PostgreSQL | Workspaces, memberships, collections, document and artifact metadata, job and outbox state, chat history, structured datasets, and active index pointers |
 | OpenSearch | Searchable chunks, embeddings, keyword indexes, and retrieval metadata |
 | Redis | Recent conversation turns with a TTL, other short-lived caches, and rate limits, with a separate Celery broker in production |
@@ -40,7 +40,7 @@ The API lives in `src/app/`. Each folder owns one concern:
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
 | `config/` | Settings read from environment variables and `.env` |
 | `workers/` | Celery worker app |
-| `db/` | PostgreSQL migration runner |
+| `db/` | PostgreSQL migration runner and database queries for conversations (`db/conversations.py`) |
 | `storage/` | Original-file storage adapters |
 | `observability/` | Structured JSON logging |
 
@@ -59,7 +59,9 @@ Reingestion is a separate action for an existing document, such as after a trans
 | `POST /collections/{collection_id}/documents/{document_id}/reingest` | Accepts an idempotency key and optional approved extraction, chunking, or enrichment settings compatible with the active collection embedding profile. Reads the recorded raw object generation and returns HTTP 202 with a job ID. Direct model changes to collection settings. A repeat can complete as a no-op. |
 | Collection settings update | An authorized change to the target embedding profile starts a collection-wide migration and returns its job ID. The settings view shows progress, failure, or activation using the job status API. |
 | `GET /collections/{collection_id}/jobs/{job_id}` | Returns authorized job status, stage, and safe failure information. |
-| `POST /collections/{collection_id}/chat/stream` | Creates a conversation on the first turn and returns its ID. Follow-ups provide that conversation ID. Streams answer deltas and returns a final message, validated citations, and optional structured results and chart data. |
+| `POST /collections/{collection_id}/chat/stream` | Creates a conversation on the first turn and returns its ID. Follow-ups provide that conversation ID. Streams server-sent events: `conversation` (ID), `delta` (answer text), then `done` (message ID, final answer, validated citations with passage text) or `error` (safe message). A turn is saved only when its citations are valid. Optional structured results and chart data come later. |
+| `GET /collections/{collection_id}/conversations`, `.../conversations/{conversation_id}` | Lists saved conversations with messages, in order, including citations. |
+| `GET /collections/{collection_id}/documents/{document_id}/original` | Returns the stored original PDF for the source viewer. Opens at the cited page (`#page=N`). |
 
 Keep raw uploads durable before queuing work. A document points to an immutable bucket object generation and records its original UTC upload time. Recheck source read and destination write permissions when linking a reused upload. A hash match against an inaccessible source follows the same client-visible flow as a new upload. After independently verifying the uploaded bytes, storage may deduplicate internally. Shared objects keep separate document permissions. Maintain a reference count or derive references transactionally before cleaning up objects. Check authorization again when a source is opened. Use provisional quotas of 500 MB per collection and 10 URLs when URL ingestion launches. Reserve upload capacity transactionally and expire unused reservations.
 
