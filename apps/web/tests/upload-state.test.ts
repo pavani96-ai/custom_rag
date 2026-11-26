@@ -7,7 +7,9 @@ import { test } from "node:test";
 
 import { resolveWorkspaceId } from "../lib/api";
 import {
+  applyJobStatus,
   applyUploadResults,
+  isFinished,
   markIngestFailed,
   markQueued,
   pendingRows,
@@ -57,4 +59,27 @@ test("workspace ID comes from the build setting, trimmed, and empty when unset",
   assert.equal(resolveWorkspaceId(" 0000-abc \n"), "0000-abc");
   assert.equal(resolveWorkspaceId(""), "");
   assert.equal(resolveWorkspaceId(undefined), "");
+});
+
+test("a job status updates only its own row through each stage", () => {
+  const start = pendingRows(["a.pdf", "b.pdf"]).map((row) => ({ ...row, state: "queued" as const }));
+  const base = { document_id: "d", job_id: "j", error_message: null };
+  const running = applyJobStatus(start, 0, { ...base, status: "running" });
+  assert.equal(running[0].state, "processing");
+  assert.equal(running[1].state, "queued");
+  const done = applyJobStatus(running, 0, { ...base, status: "succeeded" });
+  assert.equal(done[0].state, "ready");
+  assert.equal(isFinished(done[0]), true);
+  assert.equal(isFinished(done[1]), false);
+});
+
+test("a failed job shows its safe error message", () => {
+  const rows = applyJobStatus(pendingRows(["a.pdf"]), 0, {
+    job_id: "j",
+    document_id: "d",
+    status: "failed",
+    error_message: "Could not read the PDF.",
+  });
+  assert.equal(rows[0].state, "failed");
+  assert.equal(rows[0].message, "Could not read the PDF.");
 });

@@ -3,7 +3,14 @@
  * without a browser. Each function returns a new array and never mutates its input.
  */
 
-export type FileState = "pending" | "uploading" | "stored" | "queued" | "failed";
+export type FileState =
+  | "pending"
+  | "uploading"
+  | "stored"
+  | "queued"
+  | "processing"
+  | "ready"
+  | "failed";
 
 export interface FileRow {
   name: string;
@@ -69,6 +76,36 @@ export function markQueued(rows: FileRow[], index: number, result: IngestResult)
     jobId: result.job_id,
     message: "Queued for indexing.",
   });
+}
+
+/** One entry from GET /collections/{id}/jobs/{job_id}. */
+export interface JobStatus {
+  job_id: string;
+  document_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  error_message: string | null;
+}
+
+/** Update one row from its job status. Other rows are left as they are. */
+export function applyJobStatus(rows: FileRow[], index: number, job: JobStatus): FileRow[] {
+  if (job.status === "running") {
+    return updateRow(rows, index, { state: "processing", message: "Indexing." });
+  }
+  if (job.status === "succeeded") {
+    return updateRow(rows, index, { state: "ready", message: "Ready to search." });
+  }
+  if (job.status === "failed") {
+    return updateRow(rows, index, {
+      state: "failed",
+      message: job.error_message ?? "Indexing failed.",
+    });
+  }
+  return updateRow(rows, index, { state: "queued", message: "Queued for indexing." });
+}
+
+/** True once a row will not change again: indexed, or failed. */
+export function isFinished(row: FileRow): boolean {
+  return row.state === "ready" || row.state === "failed";
 }
 
 /** Record a per-file ingest failure without touching other files. */

@@ -10,20 +10,37 @@ import { type FormEvent, useState } from "react";
 import {
   apiBase,
   createCollection,
+  getJob,
   ingestUpload,
   resolveWorkspaceId,
   uploadFiles,
   type CollectionForm,
 } from "../lib/api";
 import {
+  applyJobStatus,
   applyUploadResults,
+  isFinished,
   markIngestFailed,
   markQueued,
   pendingRows,
   type FileRow,
 } from "../lib/upload-state";
 
-const EMPTY_FORM: CollectionForm = { title: "", description: "", instructions: "" };
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_ROUNDS = 300;
+
+/** Wait for the given number of milliseconds. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const EMPTY_FORM: CollectionForm = {
+  title: "",
+  description: "",
+  instructions: "",
+  format: "auto",
+  length: "standard",
+};
 
 /** Turn a FileList into an array, or an empty array when nothing was selected. */
 function selectedFiles(list: FileList | null): File[] {
@@ -36,7 +53,7 @@ async function queueStoredFiles(
   collectionId: string,
   start: FileRow[],
   onChange: (rows: FileRow[]) => void,
-): Promise<void> {
+): Promise<FileRow[]> {
   let rows = start;
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
@@ -52,6 +69,35 @@ async function queueStoredFiles(
     }
     onChange(rows);
   }
+  return rows;
+}
+
+/** Poll each queued job until every file is ready or failed, or the polling limit is reached. */
+async function pollJobStatus(
+  base: string,
+  collectionId: string,
+  start: FileRow[],
+  onChange: (rows: FileRow[]) => void,
+): Promise<void> {
+  let rows = start;
+  for (let round = 0; round < MAX_POLL_ROUNDS; round += 1) {
+    const pending = rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => row.jobId && !isFinished(row));
+    if (pending.length === 0) {
+      return;
+    }
+    await delay(POLL_INTERVAL_MS);
+    for (const { row, index } of pending) {
+      try {
+        const job = await getJob(base, collectionId, row.jobId ?? "");
+        rows = applyJobStatus(rows, index, job);
+      } catch {
+        // A failed status read is retried on the next round.
+      }
+    }
+    onChange(rows);
+  }
 }
 
 export default function Home() {
@@ -59,6 +105,7 @@ export default function Home() {
   const [rows, setRows] = useState<FileRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [chatCollectionId, setChatCollectionId] = useState<string | null>(null);
 
   /** Run the three steps in order and report failures without losing per-file state. */
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -79,12 +126,14 @@ export default function Home() {
     try {
       const base = apiBase();
       const collection = await createCollection(base, workspaceId, form);
+      setChatCollectionId(collection.id);
       const uploading = pendingRows(files.map((file) => file.name));
       setRows(uploading.map((row) => ({ ...row, state: "uploading", message: "Uploading." })));
       const results = await uploadFiles(base, collection.id, files);
       const stored = applyUploadResults(uploading, results);
       setRows(stored);
-      await queueStoredFiles(base, collection.id, stored, setRows);
+      const queued = await queueStoredFiles(base, collection.id, stored, setRows);
+      await pollJobStatus(base, collection.id, queued, setRows);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Something went wrong.");
     } finally {
@@ -122,6 +171,32 @@ export default function Home() {
           />
         </label>
         <label>
+          Answer format
+          <select
+            value={form.format}
+            onChange={(event) =>
+              setForm({ ...form, format: event.target.value as CollectionForm["format"] })
+            }
+          >
+            <option value="auto">Let the model choose</option>
+            <option value="prose">Short paragraphs</option>
+            <option value="bullets">Bulleted list</option>
+          </select>
+        </label>
+        <label>
+          Answer length
+          <select
+            value={form.length}
+            onChange={(event) =>
+              setForm({ ...form, length: event.target.value as CollectionForm["length"] })
+            }
+          >
+            <option value="brief">Brief (2-3 sentences)</option>
+            <option value="standard">Standard</option>
+            <option value="detailed">Detailed</option>
+          </select>
+        </label>
+        <label>
           PDF files
           <input name="files" type="file" accept="application/pdf" multiple required />
         </label>
@@ -131,6 +206,12 @@ export default function Home() {
       </form>
 
       {error ? <p role="alert">{error}</p> : null}
+
+      {chatCollectionId ? (
+        <p>
+          <a href={`/chat?collection=${chatCollectionId}`}>Open chat for this collection</a>
+        </p>
+      ) : null}
 
       {rows.length > 0 ? (
         <ul aria-label="Upload status">

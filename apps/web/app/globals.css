@@ -122,3 +122,78 @@ ul[aria-label="Upload status"] li {
     background: #0d1117;
   }
 }
+
+/* Chat screen: conversation list, message column, and source panel side by side. */
+main.chat-layout {
+  max-width: 72rem;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+main.chat-layout.with-source {
+  grid-template-columns: 200px minmax(0, 1fr) 320px;
+}
+.chat-sidebar ul {
+  list-style: none;
+  padding: 0;
+}
+.chat-sidebar button {
+  width: 100%;
+  background: var(--surface);
+  color: inherit;
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  font-weight: 500;
+  text-align: left;
+  margin: 0.2rem 0;
+}
+.chat-sidebar button[aria-current="true"] {
+  border-color: var(--accent);
+}
+.chat-main h1 {
+  margin-top: 0;
+}
+.messages {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.message.user p {
+  margin: 0.25rem 0 0;
+}
+.message.assistant p {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+}
+.cite {
+  border: none;
+  background: none;
+  color: #1d4ed8;
+  cursor: pointer;
+  padding: 0 0.1rem;
+  font-weight: 600;
+}
+.chat-form {
+  display: flex;
+  gap: 0.5rem;
+}
+.chat-form textarea {
+  flex: 1;
+  min-height: 3.5rem;
+}
+.source-panel {
+  border-left: 3px solid #1d4ed8;
+  padding-left: 0.75rem;
+}
+.source-panel blockquote {
+  margin: 0.5rem 0;
+  white-space: pre-wrap;
+}
+.answer ul {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+.answer p {
+  margin: 0.25rem 0;
+}
