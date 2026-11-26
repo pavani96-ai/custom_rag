@@ -1,6 +1,5 @@
 """HTTP routes for collections, uploads, search, and answers."""
 
-import hashlib
 import json
 from collections.abc import Generator, Iterator
 from contextlib import closing
@@ -16,10 +15,15 @@ from httpx import RequestError
 from llama_index.core.base.llms.types import ChatResponse
 from llama_index.llms.google_genai import GoogleGenAI
 from opensearchpy import OpenSearch, OpenSearchException
-from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
 from app.config.settings import Settings, get_settings
+from app.db.collections import (
+    collection_exists,
+    collection_workspace,
+    insert_collection,
+    ready_document_ids,
+)
 from app.db.connection import get_db
 from app.db.conversations import (
     collection_prompt_settings,
@@ -72,7 +76,7 @@ from app.schema.models import (
     SearchIn,
     UploadResult,
 )
-from app.storage import ObjectStorage, StorageError, get_storage
+from app.storage import ObjectStorage, StorageError, get_storage, store_original
 
 router = APIRouter()
 
@@ -85,35 +89,6 @@ SAVE_FAILED = "The answer could not be saved."
 INVALID_CITED_ANSWER = "Gemini returned an invalid cited answer."
 
 
-def insert_collection(conn: psycopg.Connection, workspace_id: UUID, body: CollectionIn) -> dict:
-    """Insert a collection row and return its id, workspace, and title."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO collections
-                (id, workspace_id, title, description, instructions, response_preferences)
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s)
-            RETURNING id, workspace_id, title
-            """,
-            (
-                workspace_id,
-                body.title,
-                body.description,
-                body.instructions,
-                Jsonb(body.response_preferences.model_dump()),
-            ),
-        )
-        row = cur.fetchone()
-    return {"id": row[0], "workspace_id": row[1], "title": row[2]}
-
-
-def collection_exists(conn: psycopg.Connection, collection_id: UUID) -> bool:
-    """Return True when a collection with this id exists."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM collections WHERE id = %s", (collection_id,))
-        return cur.fetchone() is not None
-
-
 def validate_upload(filename: str, data: bytes) -> str | None:
     """Return an error message for a file that must not be stored, or None if it is valid."""
     if not filename.lower().endswith(".pdf"):
@@ -123,19 +98,6 @@ def validate_upload(filename: str, data: bytes) -> str | None:
     if not data.startswith(PDF_MAGIC):
         return "File content is not a PDF."
     return None
-
-
-def store_one(
-    storage: ObjectStorage, collection_id: UUID, filename: str, data: bytes
-) -> UploadResult:
-    """Store one validated original under a key derived from its SHA-256 hash."""
-    digest = hashlib.sha256(data).hexdigest()
-    key = f"collections/{collection_id}/originals/{digest}.pdf"
-    try:
-        storage.save(key, data)
-    except (StorageError, NotImplementedError) as error:
-        return UploadResult(filename=filename, status="failed", error=str(error))
-    return UploadResult(filename=filename, status="stored", upload_id=digest)
 
 
 @router.post(
@@ -173,15 +135,7 @@ async def _process_upload(
     problem = validate_upload(filename, data)
     if problem:
         return UploadResult(filename=filename, status="failed", error=problem)
-    return store_one(storage, collection_id, filename, data)
-
-
-def collection_workspace(conn: psycopg.Connection, collection_id: UUID) -> str:
-    """Return the workspace that owns the collection."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT workspace_id FROM collections WHERE id = %s", (collection_id,))
-        row = cur.fetchone()
-    return str(row[0])
+    return store_original(storage, collection_id, filename, data)
 
 
 def insert_queued(
@@ -338,16 +292,6 @@ def get_embedder() -> Embedder:
     """Return the query embedder, created once per process."""
     settings = get_settings()
     return JinaEmbedder(settings.jina_api_key, "retrieval.query")
-
-
-def ready_document_ids(conn: psycopg.Connection, collection_id: UUID) -> list[str]:
-    """Return the IDs of the collection's documents that are ready to search."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id FROM documents WHERE collection_id = %s AND status = 'ready'",
-            (collection_id,),
-        )
-        return [str(row[0]) for row in cur.fetchall()]
 
 
 @router.post("/collections/{collection_id}/search", response_model=list[Passage])

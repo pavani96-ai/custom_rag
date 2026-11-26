@@ -1,9 +1,12 @@
 """Object storage for original files. Local folder in local mode, Cloud Storage otherwise."""
 
+import hashlib
 from pathlib import Path
 from typing import Protocol
+from uuid import UUID
 
 from app.config.settings import Settings, get_settings
+from app.schema.models import UploadResult
 
 
 class StorageError(Exception):
@@ -90,3 +93,16 @@ def build_storage(settings: Settings) -> ObjectStorage:
 def get_storage() -> ObjectStorage:
     """Return the storage adapter for the current settings. Used as a FastAPI dependency."""
     return build_storage(get_settings())
+
+
+def store_original(
+    storage: ObjectStorage, collection_id: UUID, filename: str, data: bytes
+) -> UploadResult:
+    """Store one validated original under a key derived from its SHA-256 hash."""
+    digest = hashlib.sha256(data).hexdigest()
+    key = f"collections/{collection_id}/originals/{digest}.pdf"
+    try:
+        storage.save(key, data)
+    except (StorageError, NotImplementedError) as error:
+        return UploadResult(filename=filename, status="failed", error=str(error))
+    return UploadResult(filename=filename, status="stored", upload_id=digest)

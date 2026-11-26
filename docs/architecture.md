@@ -41,7 +41,7 @@ The API lives in `src/app/`. Each folder owns one concern:
 | `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
 | `config/` | Settings read from environment variables and `.env`, including `Settings.is_cloud` |
 | `workers/` | Celery worker app |
-| `db/` | PostgreSQL migration runner, the per-request connection dependency (`db/connection.py`), and database queries for conversations (`db/conversations.py`) |
+| `db/` | PostgreSQL migration runner, the per-request connection dependency (`db/connection.py`), and queries for collections (`db/collections.py`) and conversations (`db/conversations.py`) |
 | `storage/` | Original-file storage adapters, including the `get_storage` dependency |
 | `observability/` | Structured JSON logging |
 | `api/main.py` request IDs | Accept only letters, digits, `-`, and `_` up to 64 characters; otherwise generate one |

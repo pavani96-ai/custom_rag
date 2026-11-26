@@ -4,6 +4,7 @@ Read at the start of every session. Each date has 4 to 5 short lines. Move old e
 
 ## 2026-11-26
 
+- Collection queries (`insert_collection`, `collection_exists`, `collection_workspace`, `ready_document_ids`) moved to `src/app/db/collections.py`; `store_one` became `store_original` in `src/app/storage/`. Routes only wire them up.
 - Dependencies moved to their owners: `get_db` to `src/app/db/connection.py`, `get_storage` to `src/app/storage/`. Storage picks its adapter with `Settings.is_cloud` instead of comparing `app_mode` strings. `make check`: 84 passed.
 - Production-code review fixes: split long functions (routes, indexing, retrieval, providers, conversations, tasks) into named helpers under 20 lines; retrieval moved to `rag/retrieval.py`; `IndexJob` bundles indexing arguments; request IDs must use letters, digits, `-`, `_`; middleware typed; eval scoring moved to `src/app/evals/scoring.py` with tests. Single-document cases now hit on any accepted page (previously accepted pages could not count alone). `make check` passes (83 API tests). Rebuilt API and worker: baseline unchanged (4 of 5), chat stream and ingest verified.
 - Milestone 1 acceptance checks run. Forced storage failure in the browser: one file's storage path was blocked as the collection was created, so it showed "failed: could not write…", the other file was ready, and no job was queued for the failed file. API logs are JSON with `request_id`, worker logs with `job_id`, and Flower lists `ingestion.index_document` as SUCCESS. Milestone 1 checkboxes ticked in `docs/plan.md`.
