@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from app.api import routes as retrieval
 from app.api.main import app
+from app.search.opensearch import INDEX_NAME
 
 
 def test_search_returns_ranked_passages(monkeypatch) -> None:
@@ -29,7 +30,7 @@ def test_search_returns_ranked_passages(monkeypatch) -> None:
     ]
 
     def search(*, index, body, params):
-        assert index == retrieval.INDEX_NAME
+        assert index == INDEX_NAME
         assert body["size"] == 3
         assert params["allow_partial_search_results"] == "false"
         if "script_score" in body["query"]:

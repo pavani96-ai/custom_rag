@@ -49,3 +49,16 @@ def test_request_log_is_json_with_request_id(capsys) -> None:  # type: ignore[no
     assert record["request_id"] == "abc"
     assert record["status_code"] == 200
     assert record["level"] == "info"
+
+
+def test_replaces_request_id_with_unsafe_characters() -> None:
+    """A request ID with spaces, quotes, or newlines is not echoed into logs or headers."""
+    response = client.get("/health", headers={"x-request-id": 'bad "id" <x>'})
+    assert len(response.headers["x-request-id"]) == 32
+    assert "bad" not in response.headers["x-request-id"]
+
+
+def test_accepts_request_id_with_dashes_and_underscores() -> None:
+    """Letters, digits, dashes, and underscores are safe request ID characters."""
+    response = client.get("/health", headers={"x-request-id": "Req_42-abc"})
+    assert response.headers["x-request-id"] == "Req_42-abc"

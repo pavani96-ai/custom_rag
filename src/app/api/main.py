@@ -1,7 +1,9 @@
 """FastAPI application entry point."""
 
+import re
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 import structlog
 from fastapi import FastAPI, Request
@@ -13,6 +15,7 @@ from app.config.settings import get_settings
 from app.observability import configure_logging
 
 MAX_REQUEST_ID_LENGTH = 64
+SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 configure_logging(get_settings().log_level)
 logger = structlog.stdlib.get_logger(__name__)
@@ -35,14 +38,21 @@ app.include_router(router)
 
 
 def resolve_request_id(header_value: str | None) -> str:
-    """Reuse a sane client request ID, otherwise generate one."""
-    if header_value and len(header_value) <= MAX_REQUEST_ID_LENGTH:
+    """Reuse a client request ID made of letters, digits, '-' or '_', else generate one."""
+    if header_value and _is_safe_request_id(header_value):
         return header_value
     return uuid.uuid4().hex
 
 
+def _is_safe_request_id(value: str) -> bool:
+    """Return True when the ID is short enough and contains only safe characters."""
+    return len(value) <= MAX_REQUEST_ID_LENGTH and SAFE_REQUEST_ID.fullmatch(value) is not None
+
+
 @app.middleware("http")
-async def add_request_context(request: Request, call_next):  # type: ignore[no-untyped-def]
+async def add_request_context(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Bind a request ID to every log line and log one line per request."""
     request_id = resolve_request_id(request.headers.get("x-request-id"))
     structlog.contextvars.clear_contextvars()

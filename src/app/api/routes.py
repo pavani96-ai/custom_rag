@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import closing
 from functools import lru_cache
 from uuid import UUID, uuid4
@@ -13,9 +13,7 @@ from fastapi.responses import Response, StreamingResponse
 from google.auth.exceptions import GoogleAuthError
 from google.genai import errors
 from httpx import RequestError
-from llama_index.core.llms import MockLLM
-from llama_index.core.retrievers import BaseRetriever, QueryFusionRetriever
-from llama_index.core.schema import NodeWithScore, QueryBundle, TextNode
+from llama_index.core.base.llms.types import ChatResponse
 from llama_index.llms.google_genai import GoogleGenAI
 from opensearchpy import OpenSearch, OpenSearchException
 from psycopg.types.json import Jsonb
@@ -46,7 +44,14 @@ from app.rag.chat import (
 )
 from app.rag.llm import build_llm, make_messages
 from app.rag.providers.embedder import Embedder, EmbeddingError, JinaEmbedder
-from app.rag.providers.reranker import JinaReranker, RerankError
+from app.rag.providers.reranker import RerankError
+from app.rag.retrieval import (
+    SearchTimeout,
+    build_search_filters,
+    fused_search,
+    rerank_passages,
+    to_passage,
+)
 from app.rag.tasks import index_document_task
 from app.schema.models import (
     Answer,
@@ -66,7 +71,6 @@ from app.schema.models import (
     SearchIn,
     UploadResult,
 )
-from app.search.opensearch import INDEX_NAME
 from app.storage import ObjectStorage, StorageError, build_storage
 
 router = APIRouter()
@@ -74,6 +78,10 @@ router = APIRouter()
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 PDF_MAGIC = b"%PDF"
+GENERATION_UNAVAILABLE = "Gemini generation is unavailable."
+SEARCH_UNAVAILABLE = "Search service unavailable."
+SAVE_FAILED = "The answer could not be saved."
+INVALID_CITED_ANSWER = "Gemini returned an invalid cited answer."
 
 
 def get_db() -> Iterator[psycopg.Connection]:
@@ -163,18 +171,19 @@ async def upload_files(
             UploadResult(filename=f.filename or "", status="failed", error="Unknown collection.")
             for f in files
         ]
-    results: list[UploadResult] = []
-    for upload in files:
-        filename = upload.filename or ""
-        data = await upload.read(MAX_UPLOAD_BYTES + 1)
-        problem = validate_upload(filename, data)
-        if problem:
-            results.append(UploadResult(filename=filename, status="failed", error=problem))
-            continue
-        results.append(store_one(storage, collection_id, filename, data))
-    return results
+    return [await _process_upload(storage, collection_id, upload) for upload in files]
 
 
+async def _process_upload(
+    storage: ObjectStorage, collection_id: UUID, upload: UploadFile
+) -> UploadResult:
+    """Read one upload, reject it if invalid, otherwise store it."""
+    filename = upload.filename or ""
+    data = await upload.read(MAX_UPLOAD_BYTES + 1)
+    problem = validate_upload(filename, data)
+    if problem:
+        return UploadResult(filename=filename, status="failed", error=problem)
+    return store_one(storage, collection_id, filename, data)
 
 
 def collection_workspace(conn: psycopg.Connection, collection_id: UUID) -> str:
@@ -197,28 +206,47 @@ def insert_queued(
     document_id = str(uuid4())
     job_id = str(uuid4())
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO documents
-                (id, workspace_id, collection_id, filename, content_hash,
-                 storage_key, storage_generation, uploaded_at)
-            VALUES (%s, %s, %s, %s, %s, %s, 'local', now())
-            """,
-            (document_id, workspace_id, collection_id, item.filename, item.upload_id, storage_key),
-        )
-        cur.execute(
-            """
-            INSERT INTO jobs (id, workspace_id, collection_id, document_id, kind)
-            VALUES (%s, %s, %s, %s, 'index')
-            """,
-            (job_id, workspace_id, collection_id, document_id),
-        )
-        cur.execute(
-            "INSERT INTO outbox (job_id, topic, payload) VALUES (%s, 'ingestion.index_document', "
-            "jsonb_build_object('job_id', %s::text, 'document_id', %s::text))",
-            (job_id, job_id, document_id),
-        )
+        _insert_document(cur, workspace_id, collection_id, document_id, item, storage_key)
+        _insert_job_and_outbox(cur, workspace_id, collection_id, document_id, job_id)
     return document_id, job_id
+
+
+def _insert_document(
+    cur: psycopg.Cursor,
+    workspace_id: str,
+    collection_id: UUID,
+    document_id: str,
+    item: IngestItem,
+    storage_key: str,
+) -> None:
+    """Insert the document row for a stored original."""
+    cur.execute(
+        """
+        INSERT INTO documents
+            (id, workspace_id, collection_id, filename, content_hash,
+             storage_key, storage_generation, uploaded_at)
+        VALUES (%s, %s, %s, %s, %s, %s, 'local', now())
+        """,
+        (document_id, workspace_id, collection_id, item.filename, item.upload_id, storage_key),
+    )
+
+
+def _insert_job_and_outbox(
+    cur: psycopg.Cursor, workspace_id: str, collection_id: UUID, document_id: str, job_id: str
+) -> None:
+    """Insert the indexing job and its outbox message for the document."""
+    cur.execute(
+        """
+        INSERT INTO jobs (id, workspace_id, collection_id, document_id, kind)
+        VALUES (%s, %s, %s, %s, 'index')
+        """,
+        (job_id, workspace_id, collection_id, document_id),
+    )
+    cur.execute(
+        "INSERT INTO outbox (job_id, topic, payload) VALUES (%s, 'ingestion.index_document', "
+        "jsonb_build_object('job_id', %s::text, 'document_id', %s::text))",
+        (job_id, job_id, document_id),
+    )
 
 
 def mark_published(conn: psycopg.Connection, job_id: str) -> None:
@@ -245,112 +273,91 @@ def ingest_documents(
     if not collection_exists(conn, collection_id):
         raise HTTPException(status_code=404, detail="Unknown collection.")
     workspace_id = collection_workspace(conn, collection_id)
-    accepted: list[IngestOut] = []
-    for item in body.documents:
-        storage_key = f"collections/{collection_id}/originals/{item.upload_id}.pdf"
-        if not storage.exists(storage_key):
-            raise HTTPException(status_code=409, detail=f"Original not stored: {item.filename}")
-        document_id, job_id = insert_queued(
-            conn,
-            workspace_id=workspace_id,
-            collection_id=collection_id,
-            item=item,
-            storage_key=storage_key,
-        )
-        index_document_task.delay(
-            job_id, document_id, str(collection_id), workspace_id, item.filename, storage_key
-        )
-        mark_published(conn, job_id)
-        accepted.append(
-            IngestOut(
-                document_id=UUID(document_id),
-                job_id=UUID(job_id),
-                filename=item.filename,
-                status="queued",
-            )
-        )
-    return accepted
+    return [
+        _queue_one(conn, storage, collection_id, workspace_id, item) for item in body.documents
+    ]
+
+
+def _queue_one(
+    conn: psycopg.Connection,
+    storage: ObjectStorage,
+    collection_id: UUID,
+    workspace_id: str,
+    item: IngestItem,
+) -> IngestOut:
+    """Queue indexing for one stored original and return its job IDs. 409 if not stored."""
+    storage_key = _require_stored(storage, collection_id, item)
+    return _enqueue(conn, collection_id, workspace_id, item, storage_key)
+
+
+def _require_stored(storage: ObjectStorage, collection_id: UUID, item: IngestItem) -> str:
+    """Return the storage key of a stored original. 409 when it is missing."""
+    storage_key = f"collections/{collection_id}/originals/{item.upload_id}.pdf"
+    if not storage.exists(storage_key):
+        raise HTTPException(status_code=409, detail=f"Original not stored: {item.filename}")
+    return storage_key
+
+
+def _dispatch(
+    conn: psycopg.Connection,
+    job_id: str,
+    document_id: str,
+    collection_id: UUID,
+    workspace_id: str,
+    filename: str,
+    storage_key: str,
+) -> None:
+    """Hand one indexing job to the Celery worker, then mark the outbox entry published."""
+    index_document_task.delay(
+        job_id, document_id, str(collection_id), workspace_id, filename, storage_key
+    )
+    mark_published(conn, job_id)
+
+
+def _enqueue(
+    conn: psycopg.Connection,
+    collection_id: UUID,
+    workspace_id: str,
+    item: IngestItem,
+    storage_key: str,
+) -> IngestOut:
+    """Record the document and job, hand the job to the worker, and return its IDs."""
+    document_id, job_id = insert_queued(
+        conn,
+        workspace_id=workspace_id,
+        collection_id=collection_id,
+        item=item,
+        storage_key=storage_key,
+    )
+    _dispatch(conn, job_id, document_id, collection_id, workspace_id, item.filename, storage_key)
+    return _accepted(document_id, job_id, item.filename)
+
+
+def _accepted(document_id: str, job_id: str, filename: str) -> IngestOut:
+    """Build the response that tells the browser which job tracks the document."""
+    return IngestOut(
+        document_id=UUID(document_id),
+        job_id=UUID(job_id),
+        filename=filename,
+        status="queued",
+    )
 
 
 @lru_cache(maxsize=1)
 def get_embedder() -> Embedder:
+    """Return the query embedder, created once per process."""
     settings = get_settings()
     return JinaEmbedder(settings.jina_api_key, "retrieval.query")
 
 
 def ready_document_ids(conn: psycopg.Connection, collection_id: UUID) -> list[str]:
+    """Return the IDs of the collection's documents that are ready to search."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM documents WHERE collection_id = %s AND status = 'ready'",
             (collection_id,),
         )
         return [str(row[0]) for row in cur.fetchall()]
-
-
-class OpenSearchRetriever(BaseRetriever):
-    """Adapt one native OpenSearch search to LlamaIndex nodes."""
-
-    def __init__(
-        self,
-        client: OpenSearch,
-        filters: list[dict],
-        top_k: int,
-        embedder: Embedder | None = None,
-    ) -> None:
-        super().__init__()
-        self.client = client
-        self.filters = filters
-        self.top_k = top_k
-        self.embedder = embedder
-
-    def _retrieve(self, query_bundle: QueryBundle) -> list[NodeWithScore]:
-        query = query_bundle.query_str
-        search_query = (
-            self._vector_query(query, self.embedder)
-            if self.embedder is not None
-            else {"bool": {"filter": self.filters, "must": [{"match": {"text": query}}]}}
-        )
-        result = self.client.search(
-            index=INDEX_NAME,
-            params={"ignore_unavailable": "true", "allow_partial_search_results": "false"},
-            body={
-                "size": self.top_k,
-                "_source": ["chunk_id", "document_id", "filename", "page", "text"],
-                "query": search_query,
-            },
-        )
-        if result["timed_out"]:
-            raise HTTPException(status_code=503, detail="Search timed out.")
-
-        nodes = []
-        for hit in result["hits"]["hits"]:
-            source = hit["_source"]
-            node = TextNode(
-                id_=source["chunk_id"],
-                text=source["text"],
-                metadata={
-                    key: source[key] for key in ("chunk_id", "document_id", "filename", "page")
-                },
-            )
-            nodes.append(NodeWithScore(node=node, score=hit["_score"]))
-        return nodes
-
-    def _vector_query(self, query: str, embedder: Embedder) -> dict:
-        (vector,) = embedder.embed([query])
-        return {
-            "script_score": {
-                "query": {"bool": {"filter": self.filters}},
-                "script": {
-                    "lang": "knn",
-                    "source": "knn_score",
-                    "params": {
-                        "field": "embedding",
-                        "query_value": vector,
-                        "space_type": "cosinesimil",
-                    },
-                },
-            }
-        }
 
 
 @router.post("/collections/{collection_id}/search", response_model=list[Passage])
@@ -366,39 +373,30 @@ def search_collection(
     document_ids = ready_document_ids(conn, collection_id)
     if not document_ids:
         return []
-
-    filters = [
-        {"term": {"collection_id": str(collection_id)}},
-        {"terms": {"document_id": document_ids}},
-    ]
+    filters = build_search_filters(str(collection_id), document_ids)
     try:
-        with closing(OpenSearch(hosts=[get_settings().opensearch_url], timeout=30)) as client:
-            vector_search = OpenSearchRetriever(client, filters, body.top_k, embedder)
-            keyword_search = OpenSearchRetriever(client, filters, body.top_k)
-            retriever = QueryFusionRetriever(
-                [vector_search, keyword_search],
-                mode="relative_score",
-                retriever_weights=[0.6, 0.4],
-                similarity_top_k=body.top_k,
-                num_queries=1,
-                # The constructor expects an LLM. A single query skips generation.
-                llm=MockLLM(),
-                use_async=False,
-            )
-            matches = retriever.retrieve(body.query)
-    except EmbeddingError as exc:
+        return _run_search(filters, body, embedder)
+    except (EmbeddingError, SearchTimeout) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except OpenSearchException as exc:
-        raise HTTPException(status_code=503, detail="Search service unavailable.") from exc
+        raise HTTPException(status_code=503, detail=SEARCH_UNAVAILABLE) from exc
 
-    return [
-        Passage(
-            text=match.node.get_content(),
-            score=match.get_score(),
-            **match.node.metadata,
-        )
-        for match in matches
-    ]
+
+def _run_search(filters: list[dict], body: SearchIn, embedder: Embedder) -> list[Passage]:
+    """Open the search client, run the fused search, and convert the matches to passages."""
+    with closing(OpenSearch(hosts=[get_settings().opensearch_url], timeout=30)) as client:
+        matches = fused_search(client, filters, body.top_k, embedder, body.query)
+    return [to_passage(match) for match in matches]
+
+
+def _rerank_or_503(
+    passages: list[Passage], query: str, top_n: int, settings: Settings
+) -> list[CitedPassage]:
+    """Rerank passages, turning a reranking failure into a 503."""
+    try:
+        return rerank_passages(passages, query, top_n, settings)
+    except RerankError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 SYSTEM_INSTRUCTION = (
@@ -407,31 +405,6 @@ SYSTEM_INSTRUCTION = (
     "Return the IDs you cited in source_ids. If the passages are insufficient, return an "
     "empty source_ids list."
 )
-
-
-def rerank_passages(
-    passages: list[Passage], query: str, top_n: int, settings: Settings
-) -> list[CitedPassage]:
-    """Keep the first copy of each passage, then assign citation IDs in reranked order."""
-    unique: dict[str, Passage] = {}
-    for passage in passages:
-        unique.setdefault(" ".join(passage.text.split()), passage)
-
-    by_id = {str(passage.chunk_id): passage for passage in unique.values()}
-    nodes = [
-        NodeWithScore(node=TextNode(id_=chunk_id, text=passage.text), score=passage.score)
-        for chunk_id, passage in by_id.items()
-    ]
-    reranker = JinaReranker(api_key=settings.jina_api_key, top_n=top_n)
-    ranked = reranker.postprocess_nodes(nodes, query_str=query)
-    return [
-        CitedPassage(
-            source_id=index,
-            passage=by_id[match.node.node_id],
-            rerank_score=match.get_score(),
-        )
-        for index, match in enumerate(ranked, start=1)
-    ]
 
 
 @router.post(
@@ -453,26 +426,39 @@ def ask_collection(
             sources=[],
             retrieved_contexts=[] if include_contexts else None,
         )
-
     settings = get_settings()
-    try:
-        sources = rerank_passages(passages, body.query, min(body.top_k, 5), settings)
-    except RerankError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    sources = _rerank_or_503(passages, body.query, min(body.top_k, 5), settings)
+    generated = _generate_answer(conn, collection_id, body.query, sources, settings)
+    return _answer_from_generated(generated, sources, include_contexts)
 
+
+def _generate_answer(
+    conn: psycopg.Connection,
+    collection_id: UUID,
+    question: str,
+    sources: list[CitedPassage],
+    settings: Settings,
+) -> GeneratedAnswer:
+    """Ask Gemini for a structured, cited answer. 502 when the reply does not parse."""
     preferences = collection_prompt_settings(conn, collection_id)
+    response = _call_structured_llm(settings, preferences, question, sources)
     try:
-        llm = build_llm(settings)
-        response = llm.chat(
+        return GeneratedAnswer.model_validate_json(response.message.content or "")
+    except ValidationError:
+        raise HTTPException(status_code=502, detail="Gemini returned an invalid answer.") from None
+
+
+def _call_structured_llm(
+    settings: Settings,
+    preferences: dict,
+    question: str,
+    sources: list[CitedPassage],
+) -> ChatResponse:
+    """Send the question and passages to Gemini with a JSON response schema."""
+    try:
+        return build_llm(settings).chat(
             make_messages(
-                with_style(SYSTEM_INSTRUCTION, preferences),
-                json.dumps({
-                    "question": body.query,
-                    "passages": [
-                        {"source_id": source.source_id, "text": source.passage.text}
-                        for source in sources
-                    ],
-                }),
+                with_style(SYSTEM_INSTRUCTION, preferences), _question_payload(question, sources)
             ),
             generation_config={
                 "response_mime_type": "application/json",
@@ -480,12 +466,23 @@ def ask_collection(
             },
         )
     except (errors.APIError, GoogleAuthError, RequestError) as exc:
-        raise HTTPException(status_code=503, detail="Gemini generation is unavailable.") from exc
-    try:
-        generated = GeneratedAnswer.model_validate_json(response.message.content or "")
-    except ValidationError:
-        raise HTTPException(status_code=502, detail="Gemini returned an invalid answer.") from None
+        raise HTTPException(status_code=503, detail=GENERATION_UNAVAILABLE) from exc
 
+
+def _question_payload(question: str, sources: list[CitedPassage]) -> str:
+    """Serialize the question and numbered passages as the model's user message."""
+    return json.dumps({
+        "question": question,
+        "passages": [
+            {"source_id": source.source_id, "text": source.passage.text} for source in sources
+        ],
+    })
+
+
+def _answer_from_generated(
+    generated: GeneratedAnswer, sources: list[CitedPassage], include_contexts: bool
+) -> Answer:
+    """Check the citations in a generated answer and build the response."""
     retrieved_contexts = sources if include_contexts else None
     source_ids = list(dict.fromkeys(generated.source_ids))
     if not source_ids:
@@ -502,9 +499,6 @@ def ask_collection(
     )
 
 
-GENERATION_UNAVAILABLE = "Gemini generation is unavailable."
-
-
 def resolve_conversation(
     conn: psycopg.Connection,
     body: ChatIn,
@@ -514,19 +508,30 @@ def resolve_conversation(
 ) -> UUID:
     """Return the conversation to continue, or create one for a first turn. 404 if unknown."""
     if body.conversation_id is None:
-        conversation_id = uuid4()
-        create_conversation(
-            conn,
-            conversation_id=conversation_id,
-            workspace_id=workspace_id,
-            collection_id=collection_id,
-            user_id=user_id,
-            title=body.query[:80],
-        )
-        return conversation_id
+        return _create_conversation(conn, body, collection_id, workspace_id, user_id)
     if conversation_title(conn, body.conversation_id, collection_id, user_id) is None:
         raise HTTPException(status_code=404, detail="Unknown conversation.")
     return body.conversation_id
+
+
+def _create_conversation(
+    conn: psycopg.Connection,
+    body: ChatIn,
+    collection_id: UUID,
+    workspace_id: str,
+    user_id: UUID,
+) -> UUID:
+    """Create a conversation titled from the first question and return its ID."""
+    conversation_id = uuid4()
+    create_conversation(
+        conn,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        collection_id=collection_id,
+        user_id=user_id,
+        title=body.query[:80],
+    )
+    return conversation_id
 
 
 def retrieve_for_question(
@@ -540,10 +545,7 @@ def retrieve_for_question(
     passages = search_collection(collection_id, SearchIn(query=query, top_k=20), conn, embedder)
     if not passages:
         return []
-    try:
-        return rerank_passages(passages, query, 5, settings)
-    except RerankError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return _rerank_or_503(passages, query, 5, settings)
 
 
 def answer_deltas(
@@ -582,28 +584,44 @@ def turn_events(
 ) -> Iterator[str]:
     """Stream one answer as server-sent events, then save the turn only if its citations hold."""
     yield sse_frame("conversation", {"conversation_id": str(conversation_id)})
-    parts: list[str] = []
     try:
-        for delta in answer_deltas(llm, contents, sources, instruction):
-            parts.append(delta)
-            yield sse_frame("delta", {"text": delta})
+        raw = yield from _stream_deltas(llm, contents, sources, instruction)
     except (errors.APIError, GoogleAuthError, RequestError):
         yield sse_frame("error", {"detail": GENERATION_UNAVAILABLE})
         return
-    answer = "".join(parts).strip()
+    yield from _finish_turn(settings, conversation_id, question, raw.strip(), sources)
+
+
+def _stream_deltas(
+    llm: GoogleGenAI | None, contents: str, sources: list[CitedPassage], instruction: str
+) -> Generator[str, None, str]:
+    """Stream text deltas as SSE frames and return the full raw answer text."""
+    parts: list[str] = []
+    for delta in answer_deltas(llm, contents, sources, instruction):
+        parts.append(delta)
+        yield sse_frame("delta", {"text": delta})
+    return "".join(parts)
+
+
+def _finish_turn(
+    settings: Settings,
+    conversation_id: UUID,
+    question: str,
+    answer: str,
+    sources: list[CitedPassage],
+) -> Iterator[str]:
+    """Validate the citations, save the turn, and send the final event."""
     ids = cited_ids(answer)
     if not answer or not citations_are_valid(ids, len(sources)):
-        yield sse_frame("error", {"detail": "Gemini returned an invalid cited answer."})
+        yield sse_frame("error", {"detail": INVALID_CITED_ANSWER})
         return
     citations = [passage.model_dump(mode="json") for passage in cited_passages(sources, ids)]
     try:
         message_id = persist_turn(settings, conversation_id, question, answer, citations)
     except psycopg.Error:
-        yield sse_frame("error", {"detail": "The answer could not be saved."})
+        yield sse_frame("error", {"detail": SAVE_FAILED})
         return
-    yield sse_frame(
-        "done", {"message_id": message_id, "answer": answer, "citations": citations}
-    )
+    yield sse_frame("done", {"message_id": message_id, "answer": answer, "citations": citations})
 
 
 @router.post("/collections/{collection_id}/chat/stream")
@@ -617,31 +635,48 @@ def chat_stream(
     if not collection_exists(conn, collection_id):
         raise HTTPException(status_code=404, detail="Unknown collection.")
     settings = get_settings()
-    user_id = settings.dev_user_id
-    workspace_id = collection_workspace(conn, collection_id)
-    is_new = body.conversation_id is None
-    conversation_id = resolve_conversation(conn, body, collection_id, workspace_id, user_id)
-    history = [] if is_new else load_history(conn, conversation_id)
+    events = _chat_events(conn, embedder, collection_id, body, settings)
+    return StreamingResponse(
+        events, media_type="text/event-stream", headers={"cache-control": "no-cache"}
+    )
+
+
+def _chat_events(
+    conn: psycopg.Connection,
+    embedder: Embedder,
+    collection_id: UUID,
+    body: ChatIn,
+    settings: Settings,
+) -> Iterator[str]:
+    """Prepare one chat turn (history, retrieval, model) and return its event stream."""
+    conversation_id = _start_conversation(conn, body, collection_id, settings)
+    history = [] if body.conversation_id is None else load_history(conn, conversation_id)
     sources = retrieve_for_question(conn, embedder, collection_id, body.query, settings)
-    llm = build_llm(settings) if sources else None
-    instruction = with_style(STREAM_INSTRUCTION, collection_prompt_settings(conn, collection_id))
-    events = turn_events(
-        llm=llm,
-        instruction=instruction,
+    return turn_events(
+        llm=build_llm(settings) if sources else None,
+        instruction=_turn_instruction(conn, collection_id),
         settings=settings,
         conversation_id=conversation_id,
         question=body.query,
         contents=build_contents(body.query, history, sources),
         sources=sources,
     )
-    return StreamingResponse(
-        events, media_type="text/event-stream", headers={"cache-control": "no-cache"}
-    )
 
 
-@router.get(
-    "/collections/{collection_id}/conversations", response_model=list[ConversationOut]
-)
+def _start_conversation(
+    conn: psycopg.Connection, body: ChatIn, collection_id: UUID, settings: Settings
+) -> UUID:
+    """Return the conversation for this turn, creating it for a first question."""
+    workspace_id = collection_workspace(conn, collection_id)
+    return resolve_conversation(conn, body, collection_id, workspace_id, settings.dev_user_id)
+
+
+def _turn_instruction(conn: psycopg.Connection, collection_id: UUID) -> str:
+    """Return the streaming instruction with this collection's answer style added."""
+    return with_style(STREAM_INSTRUCTION, collection_prompt_settings(conn, collection_id))
+
+
+@router.get("/collections/{collection_id}/conversations", response_model=list[ConversationOut])
 def list_collection_conversations(
     collection_id: UUID, conn: psycopg.Connection = Depends(get_db)
 ) -> list[dict]:

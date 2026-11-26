@@ -54,17 +54,16 @@ def run(storage, embedder, search, status="queued"):  # type: ignore[no-untyped-
     """Run one indexing job with fixed IDs."""
     conn = MagicMock()
     conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (status,)
-    return indexing.index_document(
-        conn=conn,
-        storage=storage,
-        embedder=embedder,
-        search=search,
+    job = indexing.IndexJob(
         job_id="job-1",
         document_id="doc-1",
         collection_id="col-1",
         workspace_id=WORKSPACE,
         filename="report.pdf",
         storage_key="collections/col-1/originals/abc.pdf",
+    )
+    return indexing.index_document(
+        conn=conn, storage=storage, embedder=embedder, search=search, job=job
     )
 
 

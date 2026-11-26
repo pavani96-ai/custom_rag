@@ -83,27 +83,50 @@ def save_turn(
 ) -> str:
     """Store the question and answer as the next two messages. Return the answer's ID."""
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(
-            "SELECT COALESCE(MAX(seq), 0) FROM messages WHERE conversation_id = %s",
-            (conversation_id,),
-        )
-        last_seq = cur.fetchone()[0]
-        cur.execute(
-            """
-            INSERT INTO messages (id, conversation_id, seq, role, content)
-            VALUES (gen_random_uuid(), %s, %s, 'user', %s)
-            """,
-            (conversation_id, last_seq + 1, question),
-        )
-        cur.execute(
-            """
-            INSERT INTO messages (id, conversation_id, seq, role, content, citations)
-            VALUES (gen_random_uuid(), %s, %s, 'assistant', %s, %s)
-            RETURNING id
-            """,
-            (conversation_id, last_seq + 2, answer, Jsonb(citations)),
-        )
-        return str(cur.fetchone()[0])
+        last_seq = _last_sequence(cur, conversation_id)
+        _insert_user_message(cur, conversation_id, last_seq + 1, question)
+        return _insert_assistant_message(cur, conversation_id, last_seq + 2, answer, citations)
+
+
+def _last_sequence(cur: psycopg.Cursor, conversation_id: UUID) -> int:
+    """Return the highest message sequence number in the conversation, or 0 when empty."""
+    cur.execute(
+        "SELECT COALESCE(MAX(seq), 0) FROM messages WHERE conversation_id = %s",
+        (conversation_id,),
+    )
+    return cur.fetchone()[0]
+
+
+def _insert_user_message(
+    cur: psycopg.Cursor, conversation_id: UUID, seq: int, question: str
+) -> None:
+    """Insert the user's question at the given sequence number."""
+    cur.execute(
+        """
+        INSERT INTO messages (id, conversation_id, seq, role, content)
+        VALUES (gen_random_uuid(), %s, %s, 'user', %s)
+        """,
+        (conversation_id, seq, question),
+    )
+
+
+def _insert_assistant_message(
+    cur: psycopg.Cursor,
+    conversation_id: UUID,
+    seq: int,
+    answer: str,
+    citations: list[dict],
+) -> str:
+    """Insert the assistant's answer with its citations and return the new message ID."""
+    cur.execute(
+        """
+        INSERT INTO messages (id, conversation_id, seq, role, content, citations)
+        VALUES (gen_random_uuid(), %s, %s, 'assistant', %s, %s)
+        RETURNING id
+        """,
+        (conversation_id, seq, answer, Jsonb(citations)),
+    )
+    return str(cur.fetchone()[0])
 
 
 def list_conversations(

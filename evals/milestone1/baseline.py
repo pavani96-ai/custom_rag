@@ -1,6 +1,6 @@
 """Run the frozen milestone 1 cases through the current search and record a baseline.
 
-Usage: python evals/milestone1/baseline.py <collection_id> [api_base_url]
+Usage: PYTHONPATH=src python evals/milestone1/baseline.py <collection_id> [api_base_url]
 Writes evals/milestone1/baseline-results.json next to this file.
 """
 
@@ -8,6 +8,8 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
+
+from app.evals.scoring import score_case
 
 HERE = Path(__file__).resolve().parent
 TOP_K = 5
@@ -29,41 +31,6 @@ def search(api: str, collection_id: str, query: str) -> list[dict]:
     )
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.loads(response.read().decode("utf-8"))
-
-
-def hit_pairs(passages: list[dict]) -> set[tuple[str, int]]:
-    """Return the (filename, page) pairs found in the passages."""
-    return {(p["filename"], p["page"]) for p in passages}
-
-
-def expected_pairs(case: dict, names: dict[str, str]) -> set[tuple[str, int]]:
-    """Return the (filename, page) pairs that count as a hit for one case."""
-    expected = case["expected_pages"]
-    if isinstance(expected, dict):
-        return {(names[key], page) for key, pages in expected.items() for page in pages}
-    return {(names[case["expected_documents"][0]], page) for page in expected}
-
-
-def acceptable_pairs(case: dict, names: dict[str, str]) -> set[tuple[str, int]]:
-    """Return the extra (filename, page) pairs accepted as hits for one case."""
-    extra = case.get("acceptable_pages", [])
-    if not extra:
-        return set()
-    return {(names[case["expected_documents"][0]], page) for page in extra}
-
-
-def score_case(case: dict, passages: list[dict], names: dict[str, str]) -> dict:
-    """Mark a case as hit when every expected pair appears in the top results."""
-    found = hit_pairs(passages)
-    wanted = expected_pairs(case, names)
-    accepted = wanted | acceptable_pairs(case, names)
-    missing = sorted(wanted - found)
-    if case["type"] == "unanswerable":
-        return {"hit": None, "note": "no expected pages; abstention is checked in chat"}
-    return {
-        "hit": not missing and bool(found & accepted),
-        "missing_expected": [list(pair) for pair in missing],
-    }
 
 
 def main() -> None:
