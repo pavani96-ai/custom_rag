@@ -4,6 +4,7 @@ Read at the start of every session. Each date has 4 to 5 short lines. Move old e
 
 ## 2026-11-26
 
+- Production-code review fixes: split long functions (routes, indexing, retrieval, providers, conversations, tasks) into named helpers under 20 lines; retrieval moved to `rag/retrieval.py`; `IndexJob` bundles indexing arguments; request IDs must use letters, digits, `-`, `_`; middleware typed; eval scoring moved to `src/app/evals/scoring.py` with tests. Single-document cases now hit on any accepted page (previously accepted pages could not count alone). `make check` passes (83 API tests). Rebuilt API and worker: baseline unchanged (4 of 5), chat stream and ingest verified.
 - Milestone 1 acceptance checks run. Forced storage failure in the browser: one file's storage path was blocked as the collection was created, so it showed "failed: could not write…", the other file was ready, and no job was queued for the failed file. API logs are JSON with `request_id`, worker logs with `job_id`, and Flower lists `ingestion.index_document` as SUCCESS. Milestone 1 checkboxes ticked in `docs/plan.md`.
 - Frozen eval set `evals/milestone1/cases.json` (`milestone1-v1`): six cases on the two demo PDFs. Pages use PDF page numbers, checked with pdftotext. Citations for the cases were checked in the chat UI.
 - Exact-search baseline (`evals/milestone1/baseline.py` → `baseline-results.json`) on current collection search (vector + BM25 fusion), top 5: 4 of 5 scored cases hit. The cross-document case misses the taxonomy guide's page 1 (miss to fix in milestone 3 retrieval work).
