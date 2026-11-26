@@ -6,8 +6,10 @@ RUN npm ci
 
 # Build stage: type check and production build. `make check` builds this target.
 FROM deps AS build
+ARG NEXT_PUBLIC_WORKSPACE_ID=""
+ENV NEXT_PUBLIC_WORKSPACE_ID=$NEXT_PUBLIC_WORKSPACE_ID
 COPY . .
-RUN npm run typecheck && npm run build
+RUN npm test && npm run typecheck && npm run build
 
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1

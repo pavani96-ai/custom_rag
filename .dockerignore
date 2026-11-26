@@ -1,0 +1,19 @@
+# Keep secrets, local data, and dev-only folders out of any Docker build context at the repo root.
+.env
+.env.*
+!.env.example
+.git
+.github
+data
+evals
+docs
+.playwright-mcp
+.claude
+.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.next
+**/.pytest_cache
+**/.ruff_cache
+**/*.tsbuildinfo

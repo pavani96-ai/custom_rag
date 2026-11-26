@@ -28,6 +28,22 @@ Use Docker Compose locally, with a local object-storage adapter for automated te
 
 A Google Cloud Application Load Balancer routes HTTPS traffic to healthy Next.js and FastAPI replicas on GKE. Scale the web and API deployments horizontally and independently. API replicas share conversation state through PostgreSQL and Redis so follow-up requests can reach any healthy replica. Celery workers consume from Redis and scale independently with ingestion demand. Browser uploads continue directly to Cloud Storage.
 
+## Code layout
+
+The API lives in `src/app/`. Each folder owns one concern:
+
+| Folder | Owns |
+|---|---|
+| `api/` | FastAPI entry point (`main.py`) and all HTTP routes (`routes.py`) |
+| `rag/` | Extraction, chunking, indexing, and Celery tasks; `rag/providers/` holds Jina clients |
+| `search/` | OpenSearch index mapping and bulk indexing |
+| `schema/` | Every Pydantic request, response, and provider payload model (`models.py`) |
+| `config/` | Settings read from environment variables and `.env` |
+| `workers/` | Celery worker app |
+| `db/` | PostgreSQL migration runner |
+| `storage/` | Original-file storage adapters |
+| `observability/` | Structured JSON logging |
+
 ## Upload and indexing API
 
 A new upload starts indexing as part of the same user action. After the original is durably stored and the upload is finalized, the browser automatically calls the ingest endpoint. FastAPI records the document with its pinned source and queues a job. The worker extracts text, chunks it, generates embeddings, and stores the vectors in the index. FastAPI validates file type, size, and malware status before the upload is finalized. The browser shows per-file job progress. A file whose original could not be stored is reported as failed before any indexing job is queued.

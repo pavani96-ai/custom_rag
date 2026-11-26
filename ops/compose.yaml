@@ -2,7 +2,8 @@
 name: rag
 
 x-api-build: &api-build
-  context: ../services/api
+  context: ../src
+  dockerfile: ../ops/api.Dockerfile
   target: runtime
 
 x-app-env: &app-env
@@ -12,6 +13,16 @@ x-app-env: &app-env
   LOCAL_STORAGE_PATH: /data/storage
   DATABASE_URL: postgresql://rag:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/rag
   OPENSEARCH_URL: http://opensearch:9200
+  JINA_API_KEY: ${JINA_API_KEY:-}
+  WEB_ORIGINS: ${WEB_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+
+x-generation-env: &generation-env
+  <<: *app-env
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+  GEMINI_JUDGE_MODEL: ${GEMINI_JUDGE_MODEL:-gemini-4-hydrogen}
+  GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+  GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
 
 services:
   postgres:
@@ -20,6 +31,8 @@ services:
       POSTGRES_USER: rag
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: rag
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -29,6 +42,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -52,22 +67,40 @@ services:
   api:
     build: *api-build
     image: rag-api:local
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    environment: *app-env
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    environment: *generation-env
     volumes:
       - ../data/storage:/data/storage
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       opensearch:
         condition: service_healthy
 
+  eval:
+    profiles: ["eval"]
+    build:
+      <<: *api-build
+      target: eval
+    image: rag-eval:local
+    environment:
+      <<: *generation-env
+      EVAL_API_BASE_URL: http://api:8000
+    user: "${EVAL_UID:-1000}:${EVAL_GID:-1000}"
+    volumes:
+      - ../ops/rag_eval.py:/app/rag_eval.py:ro
+      - ../docs/demo-docs:/inputs:ro
+      - ../evals:/evals
+    entrypoint: ["python", "/app/rag_eval.py"]
+
   worker:
     build: *api-build
     image: rag-api:local
-    command: celery -A app.celery_app worker --loglevel=INFO
+    command: celery -A app.workers.celery_app worker --loglevel=INFO
     environment: *app-env
     volumes:
       - ../data/storage:/data/storage
@@ -76,8 +109,9 @@ services:
         condition: service_healthy
 
   flower:
+    build: *api-build
     image: rag-api:local
-    command: celery -A app.celery_app flower --address=0.0.0.0 --port=5555
+    command: celery -A app.workers.celery_app flower --address=0.0.0.0 --port=5555
     environment: *app-env
     ports:
       - "127.0.0.1:5555:5555"
@@ -89,8 +123,29 @@ services:
     build:
       context: ../apps/web
       target: runtime
+      args:
+        NEXT_PUBLIC_WORKSPACE_ID: ${NEXT_PUBLIC_WORKSPACE_ID:-}
     ports:
       - "127.0.0.1:3000:3000"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?Set PGADMIN_DEFAULT_EMAIL in .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redisinsight:
+    image: redislabs/redisinsight:latest
+    ports:
+      - "127.0.0.1:5540:5540"
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres-data:

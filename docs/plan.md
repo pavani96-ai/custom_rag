@@ -7,10 +7,18 @@ Build a private workspace that ingests documents, answers with verifiable citati
 | Path | Responsibility |
 |---|---|
 | `apps/web/` | Next.js workspace, upload and chat UI, citations, charts |
-| `services/api/app/` | FastAPI routes and application modules for uploads, jobs, retrieval, chat, and analysis |
-| `services/api/app/ingestion/` | Shared extraction interfaces, Celery tasks, node building, indexing, and artifact reuse |
-| `services/api/migrations/` | PostgreSQL schema and migrations |
-| `services/api/tests/` | Unit and integration fixtures, including synthetic PDFs and spreadsheets |
+| `src/app/api/` | HTTP app: `main.py` (FastAPI entry point) and `routes.py` (all routes: collections, uploads, search, answers) |
+| `src/app/schema/` | Pydantic request, response, and provider payload models (`models.py`) |
+| `src/app/config/` | Settings loaded from environment variables and `.env` (`settings.py`) |
+| `src/app/workers/` | Celery worker app (`celery_app.py`) |
+| `src/app/db/` | PostgreSQL migration runner (`migrate.py`) |
+| `src/app/storage/` | Original-file storage adapters (local folder now, cloud later) |
+| `src/app/rag/` | Extraction and chunking (`pipeline.py`), indexing, and Celery tasks (`tasks.py`) |
+| `src/app/search/` | OpenSearch index mapping and bulk indexing (`opensearch.py`) |
+| `src/app/rag/providers/` | Jina embeddings and reranking clients |
+| `src/app/observability/` | Structured JSON logging |
+| `src/app/db/migrations/` | PostgreSQL schema and migrations (run by `db/migrate.py`) |
+| `src/tests/` | Unit and integration fixtures, including synthetic PDFs and spreadsheets |
 | `evals/` | Versioned datasets, metric runners, reports, and regression thresholds |
 | `ops/` | Docker Compose, Kubernetes manifests, collector settings, and dashboard definitions |
 | `infra/terraform/` | Cloud resources, with separate staging and production environments |

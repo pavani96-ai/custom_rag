@@ -21,8 +21,13 @@ At the end of each session, add a dated entry to CHANGELOG.md. Move entries that
 ## Layout
 
 - `apps/web/`: Next.js UI
-- `services/api/app/`: FastAPI; `ingestion/` holds Celery tasks, nodes, indexing
-- `services/api/migrations/`, `services/api/tests/`
+- `src/app/api/`: FastAPI app (`main.py`) and all HTTP routes (`routes.py`)
+- `src/app/rag/`: extraction, chunking, indexing, Celery tasks; `rag/providers/` holds Jina embedding and reranking clients
+- `src/app/search/`: OpenSearch index mapping and bulk indexing (`opensearch.py`)
+- `src/app/config/`: settings from environment and `.env`; `src/app/workers/`: Celery app
+- `src/app/schema/models.py`: every Pydantic request, response, and provider payload model
+- `src/app/db/`: migration runner and SQL migrations (`db/migrations/`); `src/app/storage/`: original-file storage; `src/app/observability/`: JSON logs
+- `src/tests/`, `ops/api.Dockerfile`: API image (build context is `src/`)
 - `evals/`, `ops/`, `infra/terraform/`
 
 ## Commands
